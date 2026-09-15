@@ -18,14 +18,25 @@
 - VRM rest-pose diagnostics
 - Rigid accessory weighting preserved as a fallback-safe behavior
 
-## v0.3 — MMD / VTuber finishing
+## v0.3 — MMD / VTuber finishing ✅ core
+- MMD eye controller bones and gaze-control bone morphs
+- MMD display frames for root, face, expressions and physics
+- Conservative automatic detection of dynamic hair / bangs / cowlicks / ears / tails / similar accessories
+- PMX accessory rigid-body and spring-joint templates
+- Blender editable standard facial-expression shape-key scaffold
+- VRM 1.0 preset expression bindings
+- VRM LookAt setup
+- VRM SpringBone1 chains for detected dynamic accessories
+- Optional VRM 1.0 export from the generated Blender script
+- Feature diagnostics surfaced in `rack inspect` and `conversion-plan.json`
+
+### v0.3.x refinement
 - Automatic T/A-pose normalization for VRM workflows
-- MMD display frames and material tuning
-- Face expression / morph reconstruction
-- Eye look / blink helpers
-- Hair, ears, tail, skirt and accessory physics templates
-- VRM expressions, look-at and spring bones
-- Weight heatmap / deformation diagnostics
+- Native expression/morph ingestion when the source format actually contains morph deltas
+- Better eye-geometry detection / assignment for avatars that have separate eye meshes
+- Material tuning for MMD / MToon-style workflows
+- Weight and physics heatmap / deformation diagnostics
+- More sophisticated multi-segment hair, skirt and tail chains
 
 ## v0.4 — animation conversion
 - Roblox animation keyframe ingestion
