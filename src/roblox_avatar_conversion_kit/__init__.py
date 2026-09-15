@@ -15,6 +15,7 @@ from .face_surface_bind import install as _install_face_surface_bind
 from .face_visible_layers import install as _install_face_visible_layers
 from .face_vmd_compat import install as _install_face_vmd_compat
 from .face_topology_weld import install as _install_face_topology_weld
+from .face_final_surface_lock import install as _install_face_final_surface_lock
 
 _install_face_runtime(_pmx)
 _install_face_follow(_pmx)
@@ -25,8 +26,9 @@ _install_face_island_stability(_pmx)
 _install_face_surface_bind(_pmx)
 _install_face_visible_layers(_pmx)
 _install_face_vmd_compat(_pmx)
-# Run last so core and alias morph names share the same physical eye/lip aperture fields.
 _install_face_topology_weld(_pmx)
+# Absolute finalizer: no later alias can change lip/eyelid motion relative to the face skin.
+_install_face_final_surface_lock(_pmx)
 del _install_face_runtime
 del _install_face_follow
 del _install_face_boundary
@@ -37,3 +39,4 @@ del _install_face_surface_bind
 del _install_face_visible_layers
 del _install_face_vmd_compat
 del _install_face_topology_weld
+del _install_face_final_surface_lock
