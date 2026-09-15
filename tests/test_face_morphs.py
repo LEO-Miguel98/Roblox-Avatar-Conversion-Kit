@@ -2,11 +2,11 @@ import unittest
 from collections import defaultdict
 
 from roblox_avatar_conversion_kit.obj import Face, ObjMesh
-from roblox_avatar_conversion_kit.pmx import _reconstructed_face_morphs
+from roblox_avatar_conversion_kit.pmx import _analyze_face_regions, _reconstructed_face_morphs
 
 
 class FaceMorphTests(unittest.TestCase):
-    def test_reconstructs_blink_winks_mouth_open_and_smile_from_face_geometry(self):
+    def _build_face(self):
         mesh = ObjMesh()
 
         def triangle(points):
@@ -39,7 +39,10 @@ class FaceMorphTests(unittest.TestCase):
                 (x + 0.03, 0.20, -0.49),
                 (x, 0.28, -0.49),
             ])
+        return mesh
 
+    def test_reconstructs_blinks_vowels_and_smile_from_face_geometry(self):
+        mesh = self._build_face()
         source_to_pmx = defaultdict(list)
         for index in range(len(mesh.vertices)):
             source_to_pmx[("RigHead", index)].append(index)
@@ -53,13 +56,40 @@ class FaceMorphTests(unittest.TestCase):
 
         self.assertEqual(
             set(by_name),
-            {"Blink", "BlinkLeft", "BlinkRight", "MouthOpen", "Smile"},
+            {
+                "Blink", "BlinkLeft", "BlinkRight",
+                "MouthOpen", "MouthI", "MouthU", "MouthE", "MouthO",
+                "Smile",
+            },
         )
         self.assertGreater(len(by_name["Blink"].offsets), 20)
         self.assertGreater(len(by_name["MouthOpen"].offsets), 10)
         self.assertEqual(by_name["Blink"].panel, 2)
-        self.assertEqual(by_name["MouthOpen"].panel, 3)
-        self.assertEqual(by_name["Smile"].panel, 3)
+        for name in ("MouthOpen", "MouthI", "MouthU", "MouthE", "MouthO", "Smile"):
+            self.assertEqual(by_name[name].panel, 3)
+
+    def test_hidden_neutral_mouth_is_revealed_by_mouth_morphs(self):
+        mesh = self._build_face()
+        mapping = {"RigHead": "head"}
+        regions = _analyze_face_regions(mesh, mapping)
+        self.assertIsNotNone(regions)
+        self.assertGreaterEqual(len(regions.mouth), 12)
+        self.assertGreater(regions.hide_depth, 0.0)
+
+        source_to_pmx = defaultdict(list)
+        for index in range(len(mesh.vertices)):
+            source_to_pmx[("RigHead", index)].append(index)
+        morphs = _reconstructed_face_morphs(
+            mesh,
+            mapping,
+            source_to_pmx,
+            regions=regions,
+            mouth_hidden_at_neutral=True,
+        )
+        mouth_open = next(morph for morph in morphs if morph.name_en == "MouthOpen")
+        # Source mouth vertices are tucked deeper (+Z in Roblox space), then morph deltas restore
+        # them toward the MMD camera (+Z after Roblox->MMD depth inversion).
+        self.assertTrue(any(delta[2] > 0.05 for _, delta in mouth_open.offsets))
 
 
 if __name__ == "__main__":
