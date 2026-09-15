@@ -3,6 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+def _coherent_surface_components(components):
+    """Keep the dominant visible surface islands and reject tiny detached fragments.
+
+    Roblox animated-head exports can put several unrelated thin pieces at nearly the same face
+    depth.  Treating every thin piece as a lip surface leaves tiny teeth/seam fragments visible and
+    animated.  Preserve the dominant coherent islands when they are large enough; otherwise keep
+    the original set for small/simple heads.
+    """
+    components = [set(component) for component in components if component]
+    if not components:
+        return []
+    largest = max(len(component) for component in components)
+    min_size = max(6, int(largest * 0.45 + 0.999999))
+    coherent = [component for component in components if len(component) >= min_size]
+    if sum(len(component) for component in coherent) >= 12:
+        return coherent
+    return components
+
+
 @dataclass(frozen=True)
 class FaceRegions:
     group: str
@@ -159,6 +178,7 @@ def install(pmx):
                 and comp_size[2] <= 0.03 * depth
             )
         ]
+        mouth_surface_components = _coherent_surface_components(mouth_surface_components)
         mouth_surface = (
             set().union(*mouth_surface_components) if mouth_surface_components else set()
         )
@@ -346,42 +366,32 @@ def install(pmx):
             dy_e = -0.045 * height if rel_y <= 0 else 0.012 * height
             dx_o = -0.022 * width * xnorm * sign_x
             dy_o = -0.052 * height if rel_y <= 0 else 0.010 * height
-            dy_n = (line - point[1]) * 0.68
+            dy_n = (line - point[1]) * 0.72
             dx_wide = 0.030 * width * xnorm * sign_x
-            dy_smile = 0.045 * height * (xnorm ** 1.25)
-            dx_smile = 0.015 * width * xnorm * sign_x
+            dy_wide = -0.006 * height
+            dx_smile = 0.017 * width * xnorm * sign_x
+            dy_smile = 0.052 * height * (xnorm ** 1.18)
             reveal_z = -regions.hide_depth if vertex_index in hidden_mouth else 0.0
-
             for pmx_index in source_to_pmx.get((group, vertex_index), ()):
                 a_offsets.append((pmx_index, pmx._mmd_vec3((0.0, dy_a, reveal_z))))
                 i_offsets.append((pmx_index, pmx._mmd_vec3((dx_i, dy_i, reveal_z))))
                 u_offsets.append((pmx_index, pmx._mmd_vec3((dx_u, dy_u, reveal_z))))
                 e_offsets.append((pmx_index, pmx._mmd_vec3((dx_e, dy_e, reveal_z))))
                 o_offsets.append((pmx_index, pmx._mmd_vec3((dx_o, dy_o, reveal_z))))
-                # Closed-mouth and closed-smile shapes must not pull the hidden mouth cavity back
-                # through the face. Only open vowel/wide shapes reveal internal geometry.
                 n_offsets.append((pmx_index, pmx._mmd_vec3((0.0, dy_n, 0.0))))
-                wide_offsets.append((pmx_index, pmx._mmd_vec3((dx_wide, -0.006 * height, reveal_z))))
+                wide_offsets.append((pmx_index, pmx._mmd_vec3((dx_wide, dy_wide, reveal_z))))
                 smile_offsets.append((pmx_index, pmx._mmd_vec3((dx_smile, dy_smile, 0.0))))
-
-        if a_offsets:
-            morphs.append(pmx._VertexMorph("あ", "MouthOpen", 3, a_offsets))
-        if i_offsets:
-            morphs.append(pmx._VertexMorph("い", "MouthI", 3, i_offsets))
-        if u_offsets:
-            morphs.append(pmx._VertexMorph("う", "MouthU", 3, u_offsets))
-        if e_offsets:
-            morphs.append(pmx._VertexMorph("え", "MouthE", 3, e_offsets))
-        if o_offsets:
-            morphs.append(pmx._VertexMorph("お", "MouthO", 3, o_offsets))
-        if n_offsets:
-            morphs.append(pmx._VertexMorph("ん", "MouthClosed", 3, n_offsets))
-        if wide_offsets:
-            morphs.append(pmx._VertexMorph("口横広げ", "MouthWide", 3, wide_offsets))
-        if smile_offsets:
-            morphs.append(pmx._VertexMorph("笑い", "Smile", 3, smile_offsets))
+        morphs.extend([
+            pmx._VertexMorph("あ", "MouthOpen", 3, a_offsets),
+            pmx._VertexMorph("い", "MouthI", 3, i_offsets),
+            pmx._VertexMorph("う", "MouthU", 3, u_offsets),
+            pmx._VertexMorph("え", "MouthE", 3, e_offsets),
+            pmx._VertexMorph("お", "MouthO", 3, o_offsets),
+            pmx._VertexMorph("ん", "MouthClosed", 3, n_offsets),
+            pmx._VertexMorph("ワイド", "MouthWide", 3, wide_offsets),
+            pmx._VertexMorph("笑い", "Smile", 3, smile_offsets),
+        ])
         return morphs
 
-    pmx._FaceRegions = FaceRegions
     pmx._analyze_face_regions = analyze_face_regions
     pmx._reconstructed_face_morphs = reconstructed_face_morphs
