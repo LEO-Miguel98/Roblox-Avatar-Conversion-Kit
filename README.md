@@ -2,7 +2,7 @@
 
 A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures`, optionally with `avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
 
-> **Current status: v0.3.11 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD-compatible motion bones/IK, gaze and facial morphs, clean OBJ-only geometry inference, and restrained secondary physics. Roblox OBJ exports still do **not** contain original skin weights or source blend-shape/FACS deltas, so reconstructed deformation and expressions should be visually reviewed before production use.
+> **Current status: v0.3.16 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD-compatible motion bones/IK, coordinated face-shell facial morphs, clean OBJ-only geometry inference, garment-aware long-sleeve weighting, and restrained secondary physics. Roblox OBJ exports still do **not** contain original skin weights or source blend-shape/FACS deltas, so reconstructed deformation and expressions should be visually reviewed before production use.
 
 ## What it does
 
@@ -12,8 +12,10 @@ A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL
 - Reconstructs a humanoid skeleton from R15 body-part transforms or inferred `Rig*` geometry.
 - Reconstructs **conservative smooth body weights with up to four bone influences** and enforces a strong primary-bone floor so chibi proportions do not collapse.
 - Detects layered clothing and safer secondary-motion appendages while keeping silhouette-defining hair shells, ears, swords and ordinary props rigid by default.
+- Uses a garment-aware upper-body solver for long sleeves so torso cloth follows the torso, sleeves remain side-locked, elbow bending is localized near the elbow, and hand influence is delayed until the cuff and capped at 15%.
 - Creates experimental **PMX 2.0** in UTF-16LE with MMD-standard body names, root/center/groove controls, leg + toe IK, shoulder/twist helpers, gaze controls, reconstructed facial morphs, display frames and collision-safe spring templates.
-- Reconstructs real PMX vertex morphs for blink, left/right wink, `あ / い / う / え / お`, and smile when the exported head contains separable front-face geometry.
+- Reconstructs PMX vertex morphs for blink/winks, eye/brow controls, `あ / い / う / え / お`, mouth controls and smile when the exported head contains separable front-face geometry.
+- Adds low-amplitude companion deformation to nearby opaque face-shell vertices so eyes, brows and mouth do not animate like detached stickers while keeping hair, glasses and the back of the head out of the facial falloff.
 - In geometry-only animated-head exports, hides detected internal mouth/cavity geometry in the neutral pose and reveals it through mouth morphs instead of leaving it visible across the face.
 - Generates a Blender build script with smooth skinning, editable facial expression keys, VRM 1.0 humanoid mapping, VRM LookAt, SpringBone chains and rest-pose diagnostics.
 - Can hand a generated PMX to a **user-supplied PMXEditor on Windows** for acceptance/count validation, optional re-save and screenshot capture.
@@ -44,28 +46,32 @@ Geometry-only ZIPs are currently supported directly by `rack inspect` and `rack 
 
 ## Facial expressions and neutral animated-head handling
 
-OBJ does not carry the avatar's original Roblox blend-shape/FACS deltas, so the kit does **not claim to recover the source facial rig exactly**. When the head `Rig*` mesh contains enough disconnected front-face geometry, the converter identifies eye and mouth regions relative to the head bounds and generates real PMX vertex morphs.
+OBJ does not carry the avatar's original Roblox blend-shape/FACS deltas, so the kit does **not claim to recover the source facial rig exactly**. When the head `Rig*` mesh contains enough disconnected front-face geometry, the converter identifies face regions relative to the head bounds and generates real PMX vertex morphs.
 
-v0.3.11 currently reconstructs:
+v0.3.15+ currently reconstructs approximately 23 face/gaze controls, including:
 
 - `まばたき` / Blink
 - `ウィンク` / BlinkLeft
 - `ウィンク右` / BlinkRight
+- EyeWide, HalfLid and HappyEyes
+- BrowRaise, BrowLower, Sad, Angry and Serious
 - `あ` / MouthOpen
 - `い` / MouthI
 - `う` / MouthU
 - `え` / MouthE
 - `お` / MouthO
-- `笑い` / Smile
+- MouthClosed, MouthWide and Smile
 - four gaze bone morphs: LookLeft / LookRight / LookUp / LookDown
 
 These are actual vertex/bone morphs, not zero-delta placeholders, but their shapes are reconstructed from exported geometry. Texture-only heads or heads without safely separable facial geometry do not receive fabricated vertex morphs.
 
-Some Roblox animated heads export internal mouth/tongue/cavity pieces that Roblox composites differently from MMD. On geometry-only conversions, v0.3.11 detects the same mouth components used for the reconstructed morphs, tucks them deeper inside the head for the neutral pose, and adds the inverse depth movement to the vowel/smile morphs. This keeps the neutral face clean while preserving animatable mouth geometry.
+v0.3.15 adds coordinated nearby-skin deformation around the reconstructed eye, brow and mouth features. Only a small front-facing opaque face-shell region participates with falloff; glasses, hair and back-of-head shell vertices stay independent. This reduces the floating-eye/floating-mouth look while keeping the head silhouette stable.
+
+Some Roblox animated heads export internal mouth/tongue/cavity pieces that Roblox composites differently from MMD. On geometry-only conversions, the converter detects the same mouth components used for reconstructed morphs, tucks them deeper inside the head for the neutral pose, and adds the inverse depth movement to the vowel/smile morphs. This keeps the neutral face clean while preserving animatable mouth geometry.
 
 ## MMD motion compatibility
 
-v0.3.11 was checked against a user-supplied set of classic PMD models and a real VMD motion. The converter now follows the motion hierarchy those files consistently expect instead of simply translating Roblox joints one-for-one.
+v0.3.11 was checked against a user-supplied set of classic PMD models and a real VMD motion. The converter follows the motion hierarchy those files consistently expect instead of simply translating Roblox joints one-for-one.
 
 The PMX motion structure includes:
 
@@ -87,6 +93,12 @@ For clean Roblox exports that only contain OBJ/MTL/textures, the converter remov
 For clean Diane, the shark tail receives a **four-segment spring chain** so motion travels from the base toward the tip. The heart/cowlick receives a **two-segment high-damping, low-angle chain** so it gives only a small wiggle rather than behaving like loose hair.
 
 Generated physics are starting values rather than a substitute for model-specific tuning. Review collision behavior, stiffness, drag, gravity, pivots and clipping in MMD before production use.
+
+## Long-sleeve clothing deformation
+
+v0.3.14 introduced the garment-aware upper-body solver after the clean Diane jacket showed excessive hand influence. The solver keeps torso cloth on hips/spine/chest, locks each sleeve to its own arm, and caps hand contribution around the cuff at 15%.
+
+v0.3.16 refines that solver so the shoulder/chest anchor fades locally, the upper sleeve stays mostly upper-arm controlled until it approaches the elbow, the upper→lower arm transition is concentrated around the elbow, and wrist/hand influence begins only close to the cuff. This is intended to reduce rubbery sleeve behavior during elbow bends and crossed-arm poses without returning to hand-dominant weighting.
 
 ## Material / texture preservation
 
@@ -117,7 +129,8 @@ OBJ stores geometry and material references, not an armature, skin weights or so
 | Geometry-only OBJ/MTL inference | ✅ experimental | Removes scene helpers and infers a Diane-style humanoid from `Rig*` geometry |
 | Blender scene builder | ✅ prototype | Manifest-backed armature + smooth weights + expression scaffold |
 | PMX 2.0 | ✅ experimental | UTF-16LE, silhouette-safe weights, MMD motion hierarchy/IK, facial/gaze controls and conservative secondary physics |
-| Reconstructed PMX face morphs | ✅ experimental | Blink/winks/A-I-U-E-O/smile when separable face geometry is detected |
+| Reconstructed PMX face morphs | ✅ experimental | Coordinated eyes/brows/mouth + nearby face-shell falloff when separable face geometry is detected |
+| Garment-aware long sleeves | ✅ experimental | Torso/sleeve separation, localized elbow blend and capped cuff/hand influence |
 | PMXEditor validation | ✅ Windows integration | Acceptance report, optional re-save/screenshot, count comparison |
 | GLB/glTF | ✅ via Blender | Optional Blender export |
 | VRM 1.0 | ✅ experimental via Blender | Humanoid map, LookAt, expression bindings and SpringBone |
@@ -129,9 +142,11 @@ OBJ stores geometry and material references, not an armature, skin weights or so
 
 The uploaded Diane exports are used as private real-world regression inputs; their source assets are not published in this public repository.
 
-The current clean-Diane v0.3.11 regression produces **45,423 PMX vertices, 32,013 triangles, 13 materials, 43 bones, 4 IK bones, 13 expression/gaze morphs, 8 rigid bodies and 6 physics joints**. The additional bones include the MMD root/groove helpers, shoulder/twist helpers, toe bones and toe IK while retaining the four-segment shark tail and two-segment restrained heart/cowlick chain.
+The current clean-Diane v0.3.16 regression target remains **45,423 PMX vertices, 32,013 triangles, 14 materials, 43 bones, 4 IK controllers, 23 face/gaze morphs, 8 rigid bodies and 6 physics joints**. The model retains the MMD root/groove helpers, shoulder/twist helpers, toe bones and toe IK, coordinated face-shell morph support, four-segment shark tail and two-segment restrained heart/cowlick chain.
 
-The neutral-face pass hides **838 detected mouth-region source vertices across 22 disconnected mouth components** inside the head until a reconstructed mouth morph is applied. A structural PMX parser consumes the generated UTF-16LE model to its exact end-of-file boundary.
+For the clean Diane jacket (`Handle2`, approximately 1,723 vertices), regression checks require **0 vertices with more than 50% hand influence**, a maximum hand influence of **15%**, and **0 cross-arm assignments**. v0.3.16 additionally tests that mid-upper-sleeve vertices remain upper-arm dominant, the elbow region blends upper/lower arm, and hand influence is delayed until the cuff.
+
+A structural PMX parser consumes the generated UTF-16LE model to its exact end-of-file boundary.
 
 PMXEditor-backed GUI validation remains Windows-side; Linux CI validates package installation, PMX generation logic, hierarchy/morph regression tests and the bridge code without pretending to execute the Windows/.NET/DirectX editor.
 
