@@ -25,7 +25,7 @@ class FaceMorphTests(unittest.TestCase):
         # Four disconnected triangles per eye provide >= 12 vertices on the front quarter.
         for side in (-1.0, 1.0):
             cx = 0.35 * side
-            for y in (1.15, 1.23, 1.31, 1.39):
+            for y in (0.76, 0.84, 0.92, 1.00):
                 triangle([
                     (cx - 0.035, y - 0.02, -0.49),
                     (cx + 0.035, y - 0.02, -0.49),
@@ -35,9 +35,9 @@ class FaceMorphTests(unittest.TestCase):
         # Four disconnected mouth triangles provide a deformable lip/mouth region.
         for x in (-0.12, -0.04, 0.04, 0.12):
             triangle([
-                (x - 0.03, 0.62, -0.49),
-                (x + 0.03, 0.62, -0.49),
-                (x, 0.70, -0.49),
+                (x - 0.03, 0.20, -0.49),
+                (x + 0.03, 0.20, -0.49),
+                (x, 0.28, -0.49),
             ])
 
         source_to_pmx = defaultdict(list)
