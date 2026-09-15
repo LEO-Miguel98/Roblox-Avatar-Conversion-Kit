@@ -181,6 +181,13 @@ def _normalize_weight_map(values: dict[str, float], *, max_influences=4) -> list
     return [VertexWeight(bone, weight / total) for bone, weight in kept]
 
 
+def _smoothstep_range(value: float, start: float, end: float) -> float:
+    """Return a clamped cubic transition between two normalized joint positions."""
+    span = max(float(end) - float(start), 1e-6)
+    t = max(0.0, min(1.0, (float(value) - float(start)) / span))
+    return t * t * (3.0 - 2.0 * t)
+
+
 def _upper_garment_torso_weights(point, by_name: dict[str, Bone]) -> dict[str, float]:
     hips = by_name["hips"].position
     spine = by_name["spine"].position
@@ -206,19 +213,23 @@ def _upper_garment_sleeve_weights(point, side: str, by_name: dict[str, Bone]) ->
     first_distance, first_t = _point_segment_projection(point, upper, lower)
     second_distance, second_t = _point_segment_projection(point, lower, hand)
     if first_distance <= second_distance:
-        # At the shoulder seam, keep a little chest influence so the jacket does not split from the
-        # torso when the arm lifts. That chest share fades rapidly before the elbow.
-        chest = 0.22 * ((1.0 - first_t) ** 2)
+        # Cloth near the shoulder stays anchored to the chest, but that anchor should disappear
+        # before the middle of the upper sleeve. Keep the upper sleeve mostly on the upper arm and
+        # move the lower-arm blend toward the elbow so the fabric bends instead of rubber-stretching
+        # across the whole limb.
+        chest = 0.22 * (1.0 - _smoothstep_range(first_t, 0.0, 0.40))
+        elbow_mix = _smoothstep_range(first_t, 0.48, 0.96)
         remainder = 1.0 - chest
         return {
-            upper_name: remainder * (1.0 - first_t),
-            lower_name: remainder * first_t,
+            upper_name: remainder * (1.0 - elbow_mix),
+            lower_name: remainder * elbow_mix,
             "chest": chest,
         }
 
-    # Cuffs should follow the wrist, but they are still cloth around the forearm—not the hand mesh.
-    # Cap wrist/hand influence at 15% even at the end of the sleeve.
-    hand_share = 0.15 * second_t
+    # Cuffs should follow the forearm until they are actually close to the wrist. Delaying the hand
+    # ramp prevents the lower sleeve from behaving like hand skin while preserving the established
+    # 15% maximum hand contribution at the very end of the cuff.
+    hand_share = 0.15 * _smoothstep_range(second_t, 0.65, 1.0)
     return {lower_name: 1.0 - hand_share, hand_name: hand_share}
 
 
