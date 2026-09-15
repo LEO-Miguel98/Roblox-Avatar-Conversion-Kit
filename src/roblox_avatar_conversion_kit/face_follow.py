@@ -2,11 +2,13 @@ from __future__ import annotations
 
 
 def install(pmx):
-    """Couple reconstructed facial features to a local front-face skin cage.
+    """Make the opaque facial skin an explicit participant in reconstructed expressions.
 
-    v0.3.18 uses the visible/front feature layer as the motion driver where possible. This prevents
-    deeper eyeball/cavity geometry from steering the skin shell and expands the deformation through
-    one or two connected skin rings so the eyelid, cheek and jaw transition reads as one face.
+    v0.3.17/v0.3.18 transferred feature motion into nearby skin. That improved attachment but could
+    still leave an eye socket visibly open while the eye island closed, or leave the lip/cheek skin
+    neutral while the mouth surface smiled. v0.3.19 authors the facial skin cage from the same shape
+    rules as the eye and mouth morphs themselves: eyelid/socket skin converges on the blink line and
+    lip/corner/cheek/chin skin receives the matching mouth expression field.
     """
 
     base_reconstructed_face_morphs = pmx._reconstructed_face_morphs
@@ -49,9 +51,6 @@ def install(pmx):
         if not front_skin:
             return morphs
 
-        # Topology propagation is restricted to already-recognized front-face skin. It therefore
-        # cannot leak through glasses/hair or around the rear skull even when they are spatially
-        # close to an eye or mouth feature.
         skin_adjacency = {index: set() for index in front_skin}
         for face in mesh.faces:
             if face.group != group or not (face.material or "").endswith("__RACK_SKIN"):
@@ -62,115 +61,19 @@ def install(pmx):
                     skin_adjacency[vertex].add(neighbor)
                     skin_adjacency[neighbor].add(vertex)
 
-        def source_motion(name, source):
-            """Recover source-space feature deltas from the authored PMX morph."""
-            morph = by_name.get(name)
-            if morph is None or not source:
-                return {}
-            by_pmx = {vertex_index: delta for vertex_index, delta in morph.offsets}
-            motion = {}
-            for source_index in source:
-                values = [
-                    by_pmx[pmx_index]
-                    for pmx_index in source_to_pmx.get((group, source_index), ())
-                    if pmx_index in by_pmx
-                ]
-                if not values:
-                    continue
-                count = float(len(values))
-                average = tuple(sum(value[axis] for value in values) / count for axis in range(3))
-                motion[source_index] = (average[0], average[1], -average[2])
-            return motion
-
         def _clamp(value, limit):
             return max(-limit, min(limit, value))
 
         def _magnitude(delta):
             return sum(value * value for value in delta)
 
-        def motion_coupled_skin(
-            name,
-            source,
-            *,
-            radius_x,
-            radius_y,
-            gain,
-            max_x,
-            max_y,
-            max_z=0.0,
-            z_gain=0.0,
-            propagate=True,
-        ):
-            morph = by_name.get(name)
-            motion = source_motion(name, source)
-            if morph is None or not motion:
+        def propagate(direct, decays):
+            """Carry a smaller expression through connected recognized facial skin only."""
+            if not direct:
                 return {}
-
-            rx = max(float(radius_x), 1e-6)
-            ry = max(float(radius_y), 1e-6)
-            movers = [
-                (mesh.vertices[index], delta)
-                for index, delta in motion.items()
-                if abs(delta[0]) + abs(delta[1]) + abs(delta[2]) > 1e-9
-            ]
-            if not movers:
-                return {}
-
-            min_x = min(point[0] for point, _delta in movers) - rx
-            max_x_bound = max(point[0] for point, _delta in movers) + rx
-            min_y = min(point[1] for point, _delta in movers) - ry
-            max_y_bound = max(point[1] for point, _delta in movers) + ry
-            direct = {}
-
-            for skin_index in front_skin:
-                point = mesh.vertices[skin_index]
-                if not (min_x <= point[0] <= max_x_bound and min_y <= point[1] <= max_y_bound):
-                    continue
-
-                nearest = []
-                for feature_point, delta in movers:
-                    nx = (point[0] - feature_point[0]) / rx
-                    ny = (point[1] - feature_point[1]) / ry
-                    distance2 = nx * nx + ny * ny
-                    if distance2 >= 1.0:
-                        continue
-                    nearest.append((distance2, delta))
-                if not nearest:
-                    continue
-                nearest.sort(key=lambda item: item[0])
-                nearest = nearest[:6]
-
-                total = 0.0
-                blended = [0.0, 0.0, 0.0]
-                for distance2, delta in nearest:
-                    weight = ((1.0 - distance2) ** 2) / (0.025 + distance2)
-                    total += weight
-                    for axis in range(3):
-                        blended[axis] += delta[axis] * weight
-                if total <= 1e-12:
-                    continue
-                blended = [value / total for value in blended]
-
-                # Slightly broader than v0.3.17, but still local. The strongest inner socket/lip
-                # vertices can follow most of the visible feature motion while the outer face fades.
-                falloff = (1.0 - nearest[0][0]) ** 1.25
-                delta = (
-                    _clamp(blended[0] * gain * falloff, max_x),
-                    _clamp(blended[1] * gain * falloff, max_y),
-                    _clamp(blended[2] * z_gain * falloff, max_z) if max_z > 0.0 else 0.0,
-                )
-                if max(abs(value) for value in delta) >= 1e-6:
-                    direct[skin_index] = delta
-
-            if not propagate or not direct:
-                return direct
-
-            # Carry a smaller amount of motion through connected facial skin. This fills the sparse
-            # gaps between restored shell fragments and gives cheeks/jaw/eyelids a continuous cage
-            # response without dragging the head silhouette.
             output = dict(direct)
             frontier = dict(direct)
-            for decay in (0.42, 0.22):
+            for decay in decays:
                 expanded = {}
                 for skin_index in front_skin:
                     if skin_index in output:
@@ -194,27 +97,19 @@ def install(pmx):
                 frontier = expanded
                 if not expanded:
                     break
-
-            # A small topology average removes single-vertex spikes while preserving the direct
-            # feature-follow direction at the inner eyelid/lip border.
-            for skin_index, delta in direct.items():
-                neighbors = [
-                    output[neighbor]
-                    for neighbor in skin_adjacency.get(skin_index, ())
-                    if neighbor in output
-                ]
-                if not neighbors:
-                    continue
-                count = float(len(neighbors))
-                average = tuple(
-                    sum(value[axis] for value in neighbors) / count
-                    for axis in range(3)
-                )
-                output[skin_index] = tuple(
-                    0.88 * delta[axis] + 0.12 * average[axis]
-                    for axis in range(3)
-                )
             return output
+
+        def nearest_influence(point, source_points, radius_x, radius_y, power=0.72):
+            rx = max(radius_x, 1e-6)
+            ry = max(radius_y, 1e-6)
+            nearest = min(
+                ((point[0] - other[0]) / rx) ** 2
+                + ((point[1] - other[1]) / ry) ** 2
+                for other in source_points
+            )
+            if nearest >= 1.0:
+                return 0.0
+            return (1.0 - nearest) ** power
 
         pending = {name: {} for name in by_name}
 
@@ -224,10 +119,53 @@ def install(pmx):
             target = pending[name]
             for source_index, delta in values.items():
                 current = target.get(source_index)
-                # Left/right support can meet at the nose. Choose the stronger local field instead
-                # of emitting duplicate PMX offsets, whose behavior varies between consumers.
                 if current is None or _magnitude(delta) > _magnitude(current):
                     target[source_index] = delta
+
+        def eye_skin_field(source, kind):
+            if len(source) < 12:
+                return {}
+            points = [mesh.vertices[index] for index in source]
+            ys = [point[1] for point in points]
+            xs = [point[0] for point in points]
+            line = sum(ys) / len(ys)
+            xmid = sum(xs) / len(xs)
+            xspan = max(max(xs) - min(xs), 1e-6)
+            direct = {}
+            radius_x = 0.15 * width
+            radius_y = 0.125 * height
+
+            for skin_index in front_skin:
+                point = mesh.vertices[skin_index]
+                influence = nearest_influence(point, points, radius_x, radius_y)
+                if influence <= 0.0:
+                    continue
+                rel_y = point[1] - line
+                rel_x = (point[0] - xmid) / xspan
+                if kind == "blink":
+                    # Socket/eyelid skin itself closes toward the same line as the eye surface.
+                    dy = (line - point[1]) * 0.94 * influence
+                    dx = 0.0
+                    max_y = 0.12 * height
+                elif kind == "wide":
+                    dx = 0.0
+                    dy = rel_y * 0.22 * influence
+                    max_y = 0.040 * height
+                elif kind == "half":
+                    dx = 0.0
+                    dy = (line - point[1]) * 0.58 * influence if rel_y > 0 else 0.0
+                    max_y = 0.070 * height
+                elif kind == "happy":
+                    arch = 0.020 * height * (1.0 - min(abs(rel_x) * 2.0, 1.0))
+                    dx = 0.0
+                    dy = (line + arch - point[1]) * 0.76 * influence
+                    max_y = 0.080 * height
+                else:
+                    continue
+                dy = _clamp(dy, max_y)
+                if max(abs(dx), abs(dy)) >= 1e-6:
+                    direct[skin_index] = (dx, dy, 0.0)
+            return propagate(direct, (0.28, 0.12))
 
         left_eye_driver = (
             regions.left_eye_surface
@@ -238,79 +176,148 @@ def install(pmx):
             if len(regions.right_eye_surface) >= 12 else regions.right_eye
         )
 
-        for name, source in (
-            ("BlinkLeft", left_eye_driver),
-            ("BlinkRight", right_eye_driver),
-        ):
-            merge_skin(name, motion_coupled_skin(
-                name,
-                source,
-                radius_x=0.15 * width,
-                radius_y=0.125 * height,
-                gain=0.82,
-                max_x=0.020 * width,
-                max_y=0.060 * height,
-            ))
-
+        merge_skin("BlinkLeft", eye_skin_field(left_eye_driver, "blink"))
+        merge_skin("BlinkRight", eye_skin_field(right_eye_driver, "blink"))
+        merge_skin("Blink", eye_skin_field(left_eye_driver, "blink"))
+        merge_skin("Blink", eye_skin_field(right_eye_driver, "blink"))
         for source in (left_eye_driver, right_eye_driver):
-            merge_skin("Blink", motion_coupled_skin(
-                "Blink",
-                source,
-                radius_x=0.15 * width,
-                radius_y=0.125 * height,
-                gain=0.82,
-                max_x=0.020 * width,
-                max_y=0.060 * height,
-            ))
+            merge_skin("EyeWide", eye_skin_field(source, "wide"))
+            merge_skin("HalfLid", eye_skin_field(source, "half"))
+            merge_skin("HappyEyes", eye_skin_field(source, "happy"))
 
-        for name, gain in (("EyeWide", 0.68), ("HalfLid", 0.75), ("HappyEyes", 0.75)):
-            for source in (left_eye_driver, right_eye_driver):
-                merge_skin(name, motion_coupled_skin(
-                    name,
-                    source,
-                    radius_x=0.15 * width,
-                    radius_y=0.13 * height,
-                    gain=gain,
-                    max_x=0.020 * width,
-                    max_y=0.055 * height,
-                ))
+        def feature_motion_field(name, source, radius_x, radius_y, gain, max_y):
+            # Brows have no opening that needs to close, so a local copy of their real motion is OK.
+            morph = by_name.get(name)
+            if morph is None or not source:
+                return {}
+            by_pmx = {vertex_index: delta for vertex_index, delta in morph.offsets}
+            movers = []
+            for source_index in source:
+                values = [
+                    by_pmx[pmx_index]
+                    for pmx_index in source_to_pmx.get((group, source_index), ())
+                    if pmx_index in by_pmx
+                ]
+                if not values:
+                    continue
+                count = float(len(values))
+                average = tuple(sum(value[a] for value in values) / count for a in range(3))
+                movers.append((mesh.vertices[source_index], (average[0], average[1], -average[2])))
+            if not movers:
+                return {}
+            direct = {}
+            source_points = [point for point, _ in movers]
+            for skin_index in front_skin:
+                point = mesh.vertices[skin_index]
+                influence = nearest_influence(point, source_points, radius_x, radius_y, 0.9)
+                if influence <= 0.0:
+                    continue
+                nearest = sorted(
+                    movers,
+                    key=lambda item: (
+                        ((point[0] - item[0][0]) / max(radius_x, 1e-6)) ** 2
+                        + ((point[1] - item[0][1]) / max(radius_y, 1e-6)) ** 2
+                    ),
+                )[:4]
+                delta = tuple(sum(item[1][a] for item in nearest) / len(nearest) for a in range(3))
+                out = (
+                    _clamp(delta[0] * gain * influence, 0.016 * width),
+                    _clamp(delta[1] * gain * influence, max_y),
+                    0.0,
+                )
+                if max(abs(value) for value in out) >= 1e-6:
+                    direct[skin_index] = out
+            return propagate(direct, (0.24,))
 
         for name in ("BrowRaise", "BrowLower", "BrowSad", "BrowAngry", "BrowSerious"):
             for source in (regions.left_brow, regions.right_brow):
-                merge_skin(name, motion_coupled_skin(
-                    name,
-                    source,
-                    radius_x=0.14 * width,
-                    radius_y=0.10 * height,
-                    gain=0.62,
-                    max_x=0.016 * width,
-                    max_y=0.032 * height,
+                merge_skin(name, feature_motion_field(
+                    name, source, 0.14 * width, 0.10 * height, 0.70, 0.036 * height
                 ))
 
         mouth_all = getattr(regions, "mouth_all", regions.mouth)
         mouth_surface = getattr(regions, "mouth_surface", frozenset())
         mouth_driver = mouth_surface if len(mouth_surface) >= 12 else mouth_all
-        if len(mouth_driver) >= 12:
-            for name in (
-                "MouthOpen",
-                "MouthI",
-                "MouthU",
-                "MouthE",
-                "MouthO",
-                "MouthClosed",
-                "MouthWide",
-                "Smile",
-            ):
-                merge_skin(name, motion_coupled_skin(
-                    name,
-                    mouth_driver,
-                    radius_x=0.20 * width,
-                    radius_y=0.17 * height,
-                    gain=0.76,
-                    max_x=0.035 * width,
-                    max_y=0.055 * height,
-                    z_gain=0.0,
-                ))
+
+        def mouth_skin_field(kind):
+            if len(mouth_driver) < 12:
+                return {}
+            points = [mesh.vertices[index] for index in mouth_driver]
+            xmid = sum(point[0] for point in points) / len(points)
+            line = sum(point[1] for point in points) / len(points)
+            radius_x = 0.21 * width
+            radius_y = 0.17 * height
+            direct = {}
+
+            for skin_index in front_skin:
+                point = mesh.vertices[skin_index]
+                nx = (point[0] - xmid) / max(radius_x, 1e-6)
+                ny = (point[1] - line) / max(radius_y, 1e-6)
+                r2 = nx * nx + ny * ny
+                if r2 >= 1.0:
+                    continue
+                near = nearest_influence(
+                    point, points, 0.13 * width, 0.10 * height, power=0.65
+                )
+                broad = (1.0 - r2) ** 1.15
+                influence = min(1.0, 0.30 * broad + 0.85 * near)
+                rel_x = point[0] - xmid
+                sign_x = 1.0 if rel_x >= 0 else -1.0
+                xnorm = min(abs(rel_x) / max(0.21 * width, 1e-6), 1.0)
+                rel_y = point[1] - line
+
+                if kind == "open":
+                    dx = 0.0
+                    dy = (
+                        (-0.075 * height if rel_y <= 0 else 0.018 * height)
+                        * (0.55 + 0.45 * min(abs(rel_y) / max(0.11 * height, 1e-6), 1.0))
+                        * influence
+                    )
+                elif kind == "i":
+                    dx = 0.025 * width * xnorm * sign_x * influence
+                    dy = -0.010 * height * (1.0 - xnorm) * influence
+                elif kind == "u":
+                    dx = -0.035 * width * xnorm * sign_x * influence
+                    dy = (-0.018 * height if rel_y <= 0 else 0.006 * height) * influence
+                elif kind == "e":
+                    dx = 0.018 * width * xnorm * sign_x * influence
+                    dy = (-0.045 * height if rel_y <= 0 else 0.012 * height) * influence
+                elif kind == "o":
+                    dx = -0.022 * width * xnorm * sign_x * influence
+                    dy = (-0.052 * height if rel_y <= 0 else 0.010 * height) * influence
+                elif kind == "closed":
+                    dx = 0.0
+                    dy = (line - point[1]) * 0.74 * influence
+                elif kind == "wide":
+                    dx = 0.030 * width * xnorm * sign_x * influence
+                    dy = -0.006 * height * influence
+                elif kind == "smile":
+                    dx = 0.017 * width * xnorm * sign_x * influence
+                    dy = (
+                        0.052 * height
+                        * (xnorm ** 1.18)
+                        * (0.55 + 0.45 * near)
+                        * influence
+                    )
+                else:
+                    continue
+                dx = _clamp(dx, 0.040 * width)
+                dy = _clamp(dy, 0.075 * height)
+                if max(abs(dx), abs(dy)) >= 1e-6:
+                    direct[skin_index] = (dx, dy, 0.0)
+            return propagate(direct, (0.34, 0.16))
+
+        for name, kind in (
+            ("MouthOpen", "open"),
+            ("MouthI", "i"),
+            ("MouthU", "u"),
+            ("MouthE", "e"),
+            ("MouthO", "o"),
+            ("MouthClosed", "closed"),
+            ("MouthWide", "wide"),
+            ("Smile", "smile"),
+        ):
+            merge_skin(name, mouth_skin_field(kind))
 
         for name, source_offsets in pending.items():
             morph = by_name.get(name)

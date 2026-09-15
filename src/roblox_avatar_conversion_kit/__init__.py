@@ -1,6 +1,6 @@
 """Roblox Avatar Conversion Kit."""
 
-__version__ = "0.3.18"
+__version__ = "0.3.19"
 
 # Keep facial reconstruction isolated from the binary PMX writer while still letting write_pmx use
 # the latest face-region logic. Importing the package installs the extensions once after pmx loads.
