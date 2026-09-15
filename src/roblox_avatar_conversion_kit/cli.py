@@ -9,6 +9,7 @@ from pathlib import Path
 from .archive import inspect_zip, safe_extract_zip
 from .blender import write_blender_script
 from .features import analyze_features
+from .geometry_only import infer_geometry_only_avatar, normalize_geometry_only_mesh
 from .manifest import discover_package, validate_manifest
 from .obj import parse_mtl, parse_obj
 from .pmx import write_pmx
@@ -24,13 +25,20 @@ def _load(zip_path: Path, workdir: Path):
     warnings = validate_manifest(package.manifest)
     mesh = parse_obj(package.obj_path)
     materials = parse_mtl(package.mtl_path)
-    translation = infer_manifest_translation(package.manifest, mesh)
-    bones = build_bones(package.manifest, translation)
-    mapping = map_groups_to_bones(package.manifest, mesh, translation)
-    features = analyze_features(package.manifest, mesh, translation, bones)
+
+    if package.manifest:
+        translation = infer_manifest_translation(package.manifest, mesh)
+        bones = build_bones(package.manifest, translation)
+        mapping = map_groups_to_bones(package.manifest, mesh, translation)
+        features = analyze_features(package.manifest, mesh, translation, bones)
+    else:
+        translation = normalize_geometry_only_mesh(mesh)
+        bones, mapping, features, inferred_warnings = infer_geometry_only_avatar(mesh)
+        warnings.extend(inferred_warnings)
+
     if not features.native_expression_source:
         warnings.append(
-            "OBJ contains no native blend-shape deltas; generated facial expressions are editable scaffolds."
+            "OBJ contains no native blend-shape deltas; generated facial expressions are editable/reconstructed controls rather than original source morphs."
         )
     return package, warnings, mesh, materials, translation, bones, mapping, features
 
@@ -44,6 +52,7 @@ def cmd_inspect(args) -> int:
         result = {
             "package": package.name,
             "archive": zip_info,
+            "manifest_mode": "manifest" if package.manifest else "geometry-only",
             "manifest_stats": package.manifest.get("stats", {}),
             "obj": {
                 "vertices": len(mesh.vertices),
@@ -51,7 +60,7 @@ def cmd_inspect(args) -> int:
                 "groups": len(mesh.group_vertex_indices()),
             },
             "materials": len(materials),
-            "manifest_to_obj_translation": translation,
+            "model_translation": translation,
             "group_to_bone": mapping,
             "bones": [bone.name for bone in bones],
             "reconstructed_weights": summarize_weights(smooth),
@@ -68,6 +77,11 @@ def cmd_prepare(args) -> int:
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     package, warnings, mesh, materials, translation, bones, mapping, features = _load(source, output)
+    if not package.manifest:
+        raise ValueError(
+            "Geometry-only ZIPs are currently supported by 'rack inspect' and 'rack pmx'. "
+            "Blender/VRM prepare still requires avatar_manifest.json so the generated Blender script can reproduce source transforms safely."
+        )
     smooth_weights = not args.rigid_weights
     accessory_physics = not args.no_physics
     expression_scaffold = not args.no_expression_scaffold

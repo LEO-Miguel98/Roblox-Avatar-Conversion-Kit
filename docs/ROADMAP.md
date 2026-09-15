@@ -78,8 +78,20 @@
 - Diane's `Handle8` speech bubble is the regression case: ~1% thickness-to-size ratio, so its text becomes readable without mirroring the entire avatar
 - UTF-16LE text, v0.3.2 conservative weights, WrapLayer skinning and physics behavior remain intact
 
+## v0.3.8 — clean OBJ inference + tuned secondary motion ✅ implementation
+- Accepts a single Roblox OBJ/MTL package even when `avatar_manifest.json` is absent
+- Removes giant `Baseplate*` scene helpers and recenters the visible avatar automatically
+- Infers Diane-style 11-group humanoid layout into standard MMD-compatible hips/spine/chest/neck/head/arm/leg/foot bone names
+- Keeps rigid props rigid while inferring likely layered jacket/lower-body/footwear groups for body-following skinning
+- Geometry-only eye controller positions are reconstructed from the inferred head bounds
+- Shark-tail detection uses the strongest behind-the-body depth projection and generates a four-segment spring chain
+- Heart/cowlick detection uses the highest small accessory and generates a two-segment, high-damping, very-low-angle wiggle chain
+- Clean Diane regression intentionally excludes the old fairy and speech-bubble accessories
+- Source OBJ still contains no native expression/morph deltas; actual blink/mouth morph generation remains a separate facial reconstruction step
+
 ### v0.3.x refinement
 - Automatic T/A-pose normalization for VRM workflows
+- Reconstructed blink/mouth/facial vertex morphs when separate face geometry can be identified safely
 - Native expression/morph ingestion when the source format actually contains morph deltas
 - Better eye-geometry detection / assignment for avatars that have separate eye meshes
 - Material tuning for MMD / MToon-style workflows
