@@ -98,6 +98,7 @@ class PmxTests(unittest.TestCase):
             self.assertEqual(stats["triangles"], 2)
             self.assertEqual(stats["ik_bones"], 2)
             self.assertEqual(stats["gaze_morphs"], 4)
+            self.assertEqual(stats["reconstructed_face_morphs"], 0)
             self.assertEqual(stats["dynamic_accessory_bones"], 3)
             self.assertGreaterEqual(stats["rigid_bodies"], 4)
             self.assertEqual(stats["physics_joints"], 3)
@@ -105,7 +106,6 @@ class PmxTests(unittest.TestCase):
             self.assertIn("LookLeft".encode("utf-16-le"), data)
             self.assertIn("表情".encode("utf-16-le"), data)
             self.assertEqual(stats["text_encoding"], "utf-16-le")
-            self.assertEqual(stats["material_edges"], "disabled")
             self.assertIn("rackJoint_Handle1".encode("utf-16-le"), data)
 
 

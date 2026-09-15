@@ -78,7 +78,7 @@
 - Diane's `Handle8` speech bubble is the regression case: ~1% thickness-to-size ratio, so its text becomes readable without mirroring the entire avatar
 - UTF-16LE text, v0.3.2 conservative weights, WrapLayer skinning and physics behavior remain intact
 
-## v0.3.8 — clean OBJ inference + tuned secondary motion ✅ implementation
+## v0.3.8 — clean OBJ inference + tuned secondary motion ✅
 - Accepts a single Roblox OBJ/MTL package even when `avatar_manifest.json` is absent
 - Removes giant `Baseplate*` scene helpers and recenters the visible avatar automatically
 - Infers Diane-style 11-group humanoid layout into standard MMD-compatible hips/spine/chest/neck/head/arm/leg/foot bone names
@@ -87,13 +87,21 @@
 - Shark-tail detection uses the strongest behind-the-body depth projection and generates a four-segment spring chain
 - Heart/cowlick detection uses the highest small accessory and generates a two-segment, high-damping, very-low-angle wiggle chain
 - Clean Diane regression intentionally excludes the old fairy and speech-bubble accessories
-- Source OBJ still contains no native expression/morph deltas; actual blink/mouth morph generation remains a separate facial reconstruction step
+
+## v0.3.9 — reconstructed facial animation ✅ implementation
+- Detects the densest humanoid `Rig*` mesh mapped to the head instead of deforming head accessories such as hair
+- Splits disconnected front-face geometry into eye and mouth regions using head-relative bounds
+- Generates real PMX vertex morphs for `Blink`, `BlinkLeft`, `BlinkRight`, `MouthOpen`, and `Smile`
+- Keeps the existing four gaze bone morphs, giving clean Diane nine usable face/gaze controls in the MMD Expressions frame
+- Does not claim recovery of original Roblox FACS or source blendshapes; these are reconstructed morphs from the exported geometry
+- Clean Diane regression generates 1,550 blink vertex offsets, 772/778 left/right wink offsets, and 838 offsets each for mouth-open and smile
+- UTF-16LE, v0.3.8 clean-OBJ inference, tail physics and restrained heart/cowlick physics remain unchanged
 
 ### v0.3.x refinement
 - Automatic T/A-pose normalization for VRM workflows
-- Reconstructed blink/mouth/facial vertex morphs when separate face geometry can be identified safely
 - Native expression/morph ingestion when the source format actually contains morph deltas
 - Better eye-geometry detection / assignment for avatars that have separate eye meshes
+- Additional reconstructed mouth vowels / expression tuning
 - Material tuning for MMD / MToon-style workflows
 - Weight and physics heatmap / deformation diagnostics
 - More sophisticated multi-segment hair, skirt and tail chains

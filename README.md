@@ -1,19 +1,21 @@
 # Roblox Avatar Conversion Kit
 
-A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures + avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
+A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures`, optionally with `avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
 
-> **Current status: v0.3.4 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD IK/gaze/physics, layered clothing, VRM metadata, and now a Windows PMXEditor acceptance + visual-validation pipeline. Roblox OBJ exports do **not** contain original skin weights or blend-shape deltas, so generated deformation and expression data remain reconstructed scaffolding and should be reviewed before production use.
+> **Current status: v0.3.9 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD IK/gaze/physics, clean OBJ-only geometry inference, and now reconstructed PMX facial vertex morphs when separate front-face geometry can be identified safely. Roblox OBJ exports still do **not** contain original skin weights or source blend-shape/FACS deltas, so all reconstructed deformation and expressions should be reviewed before production use.
 
 ## What it does
 
 - Securely validates and extracts user-provided ZIP packages.
-- Reads the exporter manifest instead of guessing only from OBJ geometry.
-- Reconstructs a humanoid skeleton from R15 body part positions.
-- Matches `Rig*` OBJ groups back to body parts using transformed MeshPart bounds.
-- Matches `Handle*` groups to accessories and follows Roblox `AccessoryWeld` targets.
+- Uses `avatar_manifest.json` when available, and can fall back to conservative geometry-only inference when a clean Roblox OBJ/MTL package has no manifest.
+- Removes obvious `Baseplate*` / terrain helper geometry from geometry-only avatar exports.
+- Reconstructs a humanoid skeleton from R15 body-part transforms or inferred `Rig*` geometry.
+- Matches `Rig*` OBJ groups back to body parts and maps them to MMD-compatible humanoid bone names.
+- Matches `Handle*` groups to accessories and follows Roblox `AccessoryWeld` targets when manifest data is available.
 - Reconstructs **conservative smooth body weights with up to four bone influences** and enforces a strong primary-bone floor so chibi proportions do not collapse.
 - Detects secondary-motion candidates, but keeps silhouette-defining full hair, bangs, ears, swords, face props, and ordinary accessories rigid by default; only safer appendages receive spring chains.
 - Creates experimental **PMX 2.0** in UTF-16LE with conservative BDEF weights, Japanese MMD bone aliases, center bone, leg IK, gaze controls, display frames, layered-clothing skinning, and collision-safe spring templates.
+- Reconstructs PMX vertex morphs for blink / left-right wink / mouth-open / smile when the head mesh contains separable front facial geometry.
 - Generates a Blender build script with improved bone tails, smooth skinning, editable facial expression keys, VRM 1.0 humanoid mapping, VRM LookAt, SpringBone chains, and rest-pose diagnostics.
 - Can have the generated Blender script export **GLB** and, when the VRM Add-on for Blender is installed, **VRM 1.0**.
 - Can hand a freshly generated PMX to a **user-supplied PMXEditor on Windows**, collect PMXEditor's own object-count report, create a PMXEditor-resaved sidecar, capture the visible editor window, and compare counts against the writer's own statistics.
@@ -27,6 +29,9 @@ python -m pip install -e .
 # Inspect an export, reconstructed weights, and VTuber feature plan
 rack inspect Diane.zip
 
+# Geometry-only clean Roblox OBJ/MTL exports are also accepted
+rack inspect DIANE_Clean.zip
+
 # Prepare an editable Blender workspace
 rack prepare Diane.zip -o output/diane
 
@@ -36,14 +41,14 @@ rack prepare Diane.zip -o output/diane --glb Diane.glb
 # Prepare Blender and export VRM 1.0 (requires VRM Add-on for Blender)
 rack prepare Diane.zip -o output/diane --vrm Diane.vrm
 
-# Direct MMD conversion with reconstructed weights, gaze controls, IK and accessory physics
-rack pmx Diane.zip -o output/diane/Diane.pmx
+# Direct MMD conversion with reconstructed weights, face/gaze controls, IK and accessory physics
+rack pmx DIANE_Clean.zip -o output/diane/DIANE_Clean.pmx
 
 # Windows: convert, then immediately validate/re-save/screenshot in your PMXEditor copy
-rack pmx Diane.zip -o output/diane/Diane.pmx --pmxeditor "C:\\Tools\\PmxEditor"
+rack pmx DIANE_Clean.zip -o output/diane/DIANE_Clean.pmx --pmxeditor "C:\\Tools\\PmxEditor"
 
 # Disable generated accessory physics when a model needs manual setup
-rack pmx Diane.zip -o output/diane/Diane-no-physics.pmx --no-physics
+rack pmx DIANE_Clean.zip -o output/diane/DIANE_Clean-no-physics.pmx --no-physics
 
 # Compatibility fallback to the v0.1 rigid body-weighting behavior
 rack pmx Diane.zip -o output/diane/Diane-rigid.pmx --rigid-weights
@@ -56,19 +61,23 @@ For Blender, open `output/diane/build_in_blender.py` in Blender's Scripting work
 PMXEditor itself is **not bundled**. Point the converter at a PMXEditor folder/executable you already have:
 
 ```powershell
-rack pmx Diane.zip -o .\output\Diane.pmx `
+rack pmx DIANE_Clean.zip -o .\output\DIANE_Clean.pmx `
   --pmxeditor "C:\Tools\PmxEditor"
 ```
 
-The original `Diane.pmx` stays untouched. By default the pipeline writes `Diane.pmxeditor-report.json`, `Diane.pmxeditor.pmx`, and `Diane.pmxeditor.png` next to it. It also compares PMXEditor's parsed vertex/material/bone/morph/rigid-body/joint counts with the converter's own generation statistics and returns a non-zero exit code if those counts disagree.
+The original generated PMX stays untouched. By default the pipeline writes a `.pmxeditor-report.json`, a PMXEditor-resaved `.pmx`, and a `.pmxeditor.png` sidecar next to it. It also compares PMXEditor's parsed vertex/material/bone/morph/rigid-body/joint counts with the converter's own generation statistics and returns a non-zero exit code if those counts disagree.
 
 Use `--pmxeditor-close` for unattended runs, or `--no-pmxeditor-resave` / `--no-pmxeditor-screenshot` to skip those sidecars. The standalone `rack-pmxeditor` tool remains available for inspecting/installing the bridge or validating an existing PMX. See [docs/PMXEDITOR_BRIDGE.md](docs/PMXEDITOR_BRIDGE.md).
 
 ## Facial expressions and eye tracking
 
-OBJ does not carry native blend-shape/morph deltas. The kit therefore **does not invent facial deformation**. In the Blender/VRM path it creates standard editable zero-delta keys such as `blink`, `blinkLeft`, `blinkRight`, `happy`, `angry`, `sad`, vowel shapes, and related VRM presets, then binds them to VRM expressions. You can sculpt or replace those keys in Blender without rebuilding the conversion pipeline.
+OBJ does not carry the avatar's original Roblox blend-shape/FACS deltas, so the kit does **not claim to recover the source facial rig exactly**. v0.3.9 adds a separate reconstruction path: when the head `Rig*` mesh contains enough disconnected front-face geometry, the converter identifies eye and mouth regions relative to the head bounds and generates real PMX vertex morphs for `Blink`, `BlinkLeft`, `BlinkRight`, `MouthOpen`, and `Smile`.
 
-For MMD, v0.3 adds `両目` / left-eye / right-eye controller bones and four gaze bone morphs (`LookLeft`, `LookRight`, `LookUp`, `LookDown`). These controls provide a standard rigging target, but visible eye movement still depends on the avatar having eye geometry/weights that can be assigned to those controls. Texture-only Roblox eyes cannot be automatically reconstructed into true eye geometry from OBJ alone.
+These are actual vertex morphs, not zero-delta placeholders, but they are reconstructed from geometry and should be visually reviewed. Heads that are purely texture/decal based or lack separable face geometry will not receive fabricated vertex morphs.
+
+For MMD, the model also includes `両目` / left-eye / right-eye controller bones and four gaze bone morphs (`LookLeft`, `LookRight`, `LookUp`, `LookDown`). On clean Diane this gives nine face/gaze controls in the Expressions frame: five reconstructed vertex morphs plus four gaze controls.
+
+In the Blender/VRM path the kit still creates standard editable expression keys and VRM preset bindings. Those can be sculpted or replaced if a richer facial rig is desired.
 
 ## Visual-preservation changes in v0.3.2
 
@@ -82,34 +91,42 @@ v0.3.2 was driven by a real MMD regression where Diane's otherwise-correct Roblo
 
 The blue selection/rig outline and violet star effects in the Roblox reference screenshot are editor/VFX overlays and are **not** treated as model geometry.
 
-## Hair / tail / accessory physics
+## Clean OBJ inference and secondary motion
 
-The converter uses the manifest's accessory transforms and `AccessoryWeld` targets plus OBJ group bounds to detect likely dynamic accessories. For PMX it adds conservative rigid-body and spring-joint templates. For VRM it adds SpringBone1 chains through the VRM Add-on when available. Detection is intentionally conservative and excludes obvious swords, gloves, clothing, speech bubbles, and face props.
+v0.3.8 adds a fallback for Roblox exports that only contain OBJ/MTL/textures. It removes giant Baseplate/terrain helpers, recenters the visible avatar, reconstructs the humanoid from `Rig*` groups, and conservatively classifies likely clothing and secondary-motion accessories.
+
+For clean Diane, `Handle4` is detected as the shark-tail candidate and receives a **four-segment spring chain** so movement can travel from the tail base toward the tip. `Handle6` is detected as the heart/cowlick and receives a **two-segment high-damping, low-angle chain** so it only wiggles subtly instead of behaving like loose hair.
 
 Generated physics are **starting values**, not a substitute for model-specific tuning. Review collision behavior, stiffness, drag, gravity, pivots, and clipping in MMD/Blender before production use.
 
 ## Why reconstruction is necessary
 
-OBJ stores geometry and material references, not an armature, skin weights, or expression deltas. The exporter manifest preserves Roblox body-part transforms, Motor6D/accessory weld information, attachment metadata, and reconstruction hints. This kit combines those sources rather than claiming lost data can be recovered exactly.
+OBJ stores geometry and material references, not an armature, skin weights, or source expression deltas. When a manifest is present, it preserves Roblox body-part transforms, Motor6D/accessory weld information, attachment metadata, and reconstruction hints. When it is absent, the geometry-only path uses conservative spatial inference rather than pretending missing data exists.
 
 ## Conversion targets
 
 | Target | Status | Notes |
 |---|---|---|
 | Inspection / reconstruction plan | ✅ | Includes smooth-weight and VTuber feature diagnostics |
+| Geometry-only OBJ/MTL inference | ✅ experimental | Removes scene helpers and infers a Diane-style humanoid from `Rig*` geometry |
 | Blender scene builder | ✅ prototype | Armature + reconstructed smooth body weights + expression scaffold |
-| PMX 2.0 | ✅ experimental | UTF-16LE, silhouette-safe weights, Japanese aliases, center/IK, gaze controls, display frames, conservative accessory physics |
+| PMX 2.0 | ✅ experimental | UTF-16LE, silhouette-safe weights, Japanese aliases, center/IK, gaze controls, reconstructed face morphs when supported, display frames, conservative accessory physics |
 | PMXEditor validation | ✅ Windows integration | Acceptance report, PMXEditor re-save, screenshot, writer-vs-editor count comparison |
 | GLB/glTF | ✅ via Blender | Optional automatic GLB export |
 | VRM 1.0 | ✅ experimental via Blender | Humanoid map, LookAt, preset expression bindings, SpringBone and optional `.vrm` export |
 | VMD / Roblox animation conversion | Planned | Requires animation source data |
-| Native facial morph recovery | Source-dependent | OBJ has no morph deltas; richer source data is required |
+| Native Roblox/FACS morph recovery | Source-dependent | OBJ has no original morph deltas; richer source data is required for exact recovery |
+| Reconstructed PMX face morphs | ✅ experimental | Blink/winks/mouth-open/smile when separable face geometry is detected |
 | Automatic T/A-pose normalization | Planned | Current script diagnoses problematic rest poses |
 | Weight/physics heatmap diagnostics | Planned | Future visual QA pass |
 
 ## Diane validation
 
-The uploaded Diane export is used as the real-world regression model without publishing Diane's source assets to this public repository. The v0.3.2 conversion preserves **51,594 PMX vertices, 36,773 triangles and 16 materials**, creates **30 PMX bones** including leg IK, eye controls and short spring chains, generates **10 conservative rigid bodies and 7 spring joints**, and keeps **4 WrapLayer clothing groups** on region-constrained body weights. Only **3 secondary-motion accessories** receive spring chains; **3 silhouette-defining candidates remain rigid**. Every reconstructed body group keeps its configured primary-bone floor, including a **97% minimum head influence**. A structural PMX parser consumes the generated UTF-16LE file to its exact end-of-file boundary after generation.
+The uploaded Diane exports are used as real-world regression models without publishing Diane's source assets to this public repository.
+
+The original manifest-backed Diane regression established the silhouette-safe weighting rules and UTF-16LE PMX compatibility. The newer **DIANE_Clean** regression intentionally removes the fairy and `NAH, I'D WIN` sign and contains no manifest. Its geometry-only conversion removes the two Baseplate groups and produces **45,423 PMX vertices, 32,013 triangles, 13 materials, 29 bones, 8 rigid bodies and 6 spring joints**. Secondary motion is limited to **4 shark-tail bones + 2 heart/cowlick bones**.
+
+v0.3.9 additionally reconstructs **5 real PMX vertex morphs** on Diane's `Rig7` face geometry: Blink (1,550 PMX vertex offsets), BlinkLeft (772), BlinkRight (778), MouthOpen (838), and Smile (838). The existing four gaze bone morphs remain, so the Expressions frame contains nine controls. A structural PMX parser consumes the generated UTF-16LE file to its exact end-of-file boundary after generation.
 
 PMXEditor-backed validation is intentionally Windows-side: the Linux development/CI environment can test the bridge source, package discovery, CLI wiring, and count-comparison logic, while the actual PMXEditor/.NET/DirectX runtime is exercised on a Windows machine with the user's own PMXEditor installation.
 
