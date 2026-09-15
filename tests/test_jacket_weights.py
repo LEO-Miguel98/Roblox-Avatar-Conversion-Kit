@@ -34,8 +34,26 @@ class JacketWeightTests(unittest.TestCase):
         self.assertIn("leftLowerArm", values)
         self.assertFalse(any(name.startswith("right") for name in values))
 
+    def test_mid_upper_sleeve_stays_upper_arm_dominant(self):
+        values = self._by_name((1.5, 2.0, 0.0))
+        self.assertGreater(values.get("leftUpperArm", 0.0), 0.90)
+        self.assertLess(values.get("leftLowerArm", 0.0), 0.10)
+        self.assertEqual(values.get("leftHand", 0.0), 0.0)
+
+    def test_elbow_region_blends_upper_and_lower_arm(self):
+        values = self._by_name((1.8, 2.0, 0.0))
+        self.assertGreater(values.get("leftLowerArm", 0.0), values.get("leftUpperArm", 0.0))
+        self.assertGreater(values.get("leftUpperArm", 0.0), 0.0)
+        self.assertEqual(values.get("leftHand", 0.0), 0.0)
+
+    def test_mid_forearm_does_not_pick_up_hand_early(self):
+        values = self._by_name((2.5, 2.0, 0.0))
+        self.assertGreater(values.get("leftLowerArm", 0.0), 0.99)
+        self.assertEqual(values.get("leftHand", 0.0), 0.0)
+
     def test_cuff_has_small_wrist_influence_not_hand_dominance(self):
         values = self._by_name((2.9, 2.0, 0.0))
+        self.assertGreater(values.get("leftHand", 0.0), 0.0)
         self.assertLessEqual(values.get("leftHand", 0.0), 0.15 + 1e-8)
         self.assertGreater(values.get("leftLowerArm", 0.0), values.get("leftHand", 0.0))
 
