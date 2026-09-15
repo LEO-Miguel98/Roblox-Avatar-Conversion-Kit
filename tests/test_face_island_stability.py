@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from roblox_avatar_conversion_kit.face_island_stability import _is_fragmented_surface
 from roblox_avatar_conversion_kit.face_runtime import _coherent_surface_components
+from roblox_avatar_conversion_kit.face_surface_bind import _surface_bindings
 from roblox_avatar_conversion_kit.obj import Face, ObjMesh
 from roblox_avatar_conversion_kit.pmx import _analyze_face_regions, _reconstructed_face_morphs
 
@@ -70,6 +71,17 @@ class FaceIslandStabilityTests(unittest.TestCase):
         self.assertTrue(_is_fragmented_surface(mesh, "RigHead", regions.left_eye_surface))
         self.assertTrue(_is_fragmented_surface(mesh, "RigHead", regions.right_eye_surface))
 
+        # Binding coverage is independent of whether the resulting PMX delta happens to be zero.
+        # PMX legitimately omits zero-length offsets, so test the projection itself explicitly.
+        left_bindings = _surface_bindings(
+            mesh, "RigHead", regions.left_eye_surface, regions.center, regions.size
+        )
+        right_bindings = _surface_bindings(
+            mesh, "RigHead", regions.right_eye_surface, regions.center, regions.size
+        )
+        self.assertEqual(set(left_bindings), set(regions.left_eye_surface))
+        self.assertEqual(set(right_bindings), set(regions.right_eye_surface))
+
         morphs = _reconstructed_face_morphs(
             mesh,
             mapping,
@@ -81,11 +93,10 @@ class FaceIslandStabilityTests(unittest.TestCase):
         self.assertIn("Blink", by_name)
         blink_indices = {index for index, _ in by_name["Blink"].offsets}
 
-        # v0.3.23 intentionally removed all fragmented eye artwork from the morph. v0.3.24 keeps
-        # deeper eye pieces rigid but re-adds only the visible/front overlay surface, bound to the
-        # local opaque skin triangle so it cannot drift away from the socket during VMD playback.
-        self.assertTrue(set(regions.left_eye_surface).issubset(blink_indices))
-        self.assertTrue(set(regions.right_eye_surface).issubset(blink_indices))
+        # v0.3.24 re-adds only the visible/front fragmented overlay vertices that have nonzero
+        # local skin motion. Deeper eye geometry remains rigid, while the skin itself still blinks.
+        self.assertTrue(set(regions.left_eye_surface).intersection(blink_indices))
+        self.assertTrue(set(regions.right_eye_surface).intersection(blink_indices))
         left_deep = set(regions.left_eye) - set(regions.left_eye_surface)
         right_deep = set(regions.right_eye) - set(regions.right_eye_surface)
         self.assertTrue(left_deep.isdisjoint(blink_indices))
