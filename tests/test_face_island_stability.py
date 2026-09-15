@@ -26,7 +26,7 @@ class FaceIslandStabilityTests(unittest.TestCase):
         ]
         self.assertEqual(len(_coherent_surface_components(simple)), 4)
 
-    def test_fragmented_eye_artwork_stays_rigid_while_socket_skin_blinks(self):
+    def test_fragmented_eye_overlay_surface_binds_while_socket_skin_blinks(self):
         mesh = ObjMesh()
 
         def triangle(points, material="FaceMtl"):
@@ -81,8 +81,15 @@ class FaceIslandStabilityTests(unittest.TestCase):
         self.assertIn("Blink", by_name)
         blink_indices = {index for index, _ in by_name["Blink"].offsets}
 
-        self.assertTrue(set(regions.left_eye).isdisjoint(blink_indices))
-        self.assertTrue(set(regions.right_eye).isdisjoint(blink_indices))
+        # v0.3.23 intentionally removed all fragmented eye artwork from the morph. v0.3.24 keeps
+        # deeper eye pieces rigid but re-adds only the visible/front overlay surface, bound to the
+        # local opaque skin triangle so it cannot drift away from the socket during VMD playback.
+        self.assertTrue(set(regions.left_eye_surface).issubset(blink_indices))
+        self.assertTrue(set(regions.right_eye_surface).issubset(blink_indices))
+        left_deep = set(regions.left_eye) - set(regions.left_eye_surface)
+        right_deep = set(regions.right_eye) - set(regions.right_eye_surface)
+        self.assertTrue(left_deep.isdisjoint(blink_indices))
+        self.assertTrue(right_deep.isdisjoint(blink_indices))
         self.assertTrue(eye_skin.intersection(blink_indices))
 
 
