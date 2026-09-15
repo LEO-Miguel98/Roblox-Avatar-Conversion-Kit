@@ -12,6 +12,8 @@ from .features import analyze_features
 from .manifest import discover_package, validate_manifest
 from .obj import parse_mtl, parse_obj
 from .pmx import write_pmx
+from .pmxeditor import PmxEditorBridgeError, validate_with_pmxeditor
+from .pmxeditor_pipeline import compare_pmxeditor_counts, default_validation_outputs
 from .rig import build_bones, infer_manifest_translation, map_groups_to_bones
 from .weights import compute_group_vertex_weights, primary_weight_diagnostics, summarize_weights
 
@@ -138,8 +140,36 @@ def cmd_pmx(args) -> int:
                 src = package.root / material.map_kd
                 if src.is_file():
                     shutil.copy2(src, output.parent / src.name)
-    print(json.dumps({"output": str(output), "stats": stats, "warnings": warnings}, indent=2))
-    return 0
+
+    pmxeditor_result = None
+    exit_code = 0
+    if args.pmxeditor:
+        defaults = default_validation_outputs(output)
+        report = Path(args.pmxeditor_report) if args.pmxeditor_report else defaults["report"]
+        resave = None if args.no_pmxeditor_resave else defaults["resave"]
+        screenshot = None if args.no_pmxeditor_screenshot else defaults["screenshot"]
+        pmxeditor_result = validate_with_pmxeditor(
+            output,
+            editor=Path(args.pmxeditor),
+            report=report,
+            resave=resave,
+            screenshot=screenshot,
+            timeout=args.pmxeditor_timeout,
+            keep_open=not args.pmxeditor_close,
+            install_if_missing=not args.no_pmxeditor_install,
+        )
+        comparison = compare_pmxeditor_counts(stats, pmxeditor_result)
+        pmxeditor_result["count_comparison"] = comparison
+        if pmxeditor_result.get("status") != "accepted" or not comparison["matches"]:
+            exit_code = 2
+
+    print(json.dumps({
+        "output": str(output),
+        "stats": stats,
+        "warnings": warnings,
+        "pmxeditor": pmxeditor_result,
+    }, indent=2))
+    return exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -198,13 +228,43 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable generated accessory/hair PMX rigid bodies and joints",
     )
+    pmx_parser.add_argument(
+        "--pmxeditor",
+        metavar="PATH",
+        help="On Windows, validate the generated PMX with this PMXEditor folder/executable",
+    )
+    pmx_parser.add_argument("--pmxeditor-report", help="Override the PMXEditor JSON report path")
+    pmx_parser.add_argument(
+        "--pmxeditor-timeout", type=float, default=45.0,
+        help="Seconds to wait for PMXEditor acceptance (default: 45)",
+    )
+    pmx_parser.add_argument(
+        "--pmxeditor-close", action="store_true",
+        help="Close PMXEditor after the acceptance report and optional screenshot are produced",
+    )
+    pmx_parser.add_argument(
+        "--no-pmxeditor-install", action="store_true",
+        help="Do not auto-install the RACK PMXEditor bridge when it is missing",
+    )
+    pmx_parser.add_argument(
+        "--no-pmxeditor-resave", action="store_true",
+        help="Do not create a PMXEditor-resaved sidecar PMX",
+    )
+    pmx_parser.add_argument(
+        "--no-pmxeditor-screenshot", action="store_true",
+        help="Do not capture the visible PMXEditor window to PNG",
+    )
     pmx_parser.set_defaults(func=cmd_pmx)
     return parser
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
-    return int(args.func(args))
+    try:
+        args = build_parser().parse_args(argv)
+        return int(args.func(args))
+    except PmxEditorBridgeError as exc:
+        print(f"PMXEditor bridge error: {exc}")
+        return 2
 
 
 if __name__ == "__main__":
