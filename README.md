@@ -2,7 +2,7 @@
 
 A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures + avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
 
-> **Current status: v0.2 prototype.** Geometry, materials, textures, R15 structure, accessory weld targets, reconstructed humanoid bones, smooth body weights, MMD leg IK, and Blender/VRM helpers are implemented. Roblox OBJ exports do **not** contain original skin weights, so generated weights are reconstructed and should still be reviewed before production use.
+> **Current status: v0.3 prototype.** The kit now reconstructs a humanoid rig, smooth body weights, MMD IK, gaze controllers, dynamic accessory physics, VRM humanoid/look-at metadata, SpringBone chains, and an editable facial-expression scaffold. Roblox OBJ exports do **not** contain original skin weights or blend-shape deltas, so generated deformation and expression data are reconstructed scaffolding and should be reviewed before production use.
 
 ## What it does
 
@@ -11,10 +11,11 @@ A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL
 - Reconstructs a humanoid skeleton from R15 body part positions.
 - Matches `Rig*` OBJ groups back to body parts using transformed MeshPart bounds.
 - Matches `Handle*` groups to accessories and follows Roblox `AccessoryWeld` targets.
-- Reconstructs **smooth body weights with up to four bone influences** while keeping accessories rigid.
-- Creates an experimental **PMX 2.0** file with BDEF1/BDEF2/BDEF4 weights, Japanese MMD bone aliases, center bone, and leg IK controllers.
-- Generates a Blender build script with improved bone tails, smooth skinning, VRM 1.0 humanoid mapping, and rest-pose diagnostics.
-- Can have the generated Blender script export a **GLB** automatically.
+- Reconstructs **smooth body weights with up to four bone influences** while keeping ordinary accessories rigid.
+- Detects likely dynamic hair, bangs, cowlicks, ears, tails, ribbons, wings, scarves, capes, and similar accessories from manifest + mesh placement.
+- Creates experimental **PMX 2.0** with BDEF1/BDEF2/BDEF4 weights, Japanese MMD bone aliases, center bone, leg IK, gaze-control bone morphs, display frames, and generated accessory rigid bodies/joints.
+- Generates a Blender build script with improved bone tails, smooth skinning, editable facial expression keys, VRM 1.0 humanoid mapping, VRM LookAt, SpringBone chains, and rest-pose diagnostics.
+- Can have the generated Blender script export **GLB** and, when the VRM Add-on for Blender is installed, **VRM 1.0**.
 - Never downloads arbitrary `meshId` / `textureId` URLs from the manifest.
 
 ## Quick start
@@ -22,51 +23,69 @@ A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL
 ```bash
 python -m pip install -e .
 
-# Inspect an export and reconstructed weight statistics
+# Inspect an export, reconstructed weights, and VTuber feature plan
 rack inspect Diane.zip
 
 # Prepare an editable Blender workspace
 rack prepare Diane.zip -o output/diane
 
-# Prepare Blender workflow and automatically export a GLB when the generated script is run
+# Prepare Blender and export GLB when the generated script is run
 rack prepare Diane.zip -o output/diane --glb Diane.glb
 
-# Direct MMD conversion with reconstructed smooth weights and leg IK
+# Prepare Blender and export VRM 1.0 (requires VRM Add-on for Blender)
+rack prepare Diane.zip -o output/diane --vrm Diane.vrm
+
+# Direct MMD conversion with reconstructed weights, gaze controls, IK and accessory physics
 rack pmx Diane.zip -o output/diane/Diane.pmx
 
-# Compatibility fallback to the v0.1 rigid weighting behavior
+# Disable generated accessory physics when a model needs manual setup
+rack pmx Diane.zip -o output/diane/Diane-no-physics.pmx --no-physics
+
+# Compatibility fallback to the v0.1 rigid body-weighting behavior
 rack pmx Diane.zip -o output/diane/Diane-rigid.pmx --rigid-weights
 ```
 
-For Blender, open Blender and run `output/diane/build_in_blender.py` from the Scripting workspace. If the VRM Add-on for Blender is installed, the script assigns the VRM 1.0 humanoid bone slots it can identify. It also warns when the imported Roblox rest pose is far from a T/A-pose instead of pretending the model is production-ready.
+For Blender, open `output/diane/build_in_blender.py` in Blender's Scripting workspace and run it. If the VRM Add-on for Blender is installed, the generated script configures the humanoid bone slots it can identify, LookAt, standard expression bindings, and SpringBone chains for detected dynamic accessories.
+
+## Facial expressions and eye tracking
+
+OBJ does not carry native blend-shape/morph deltas. The kit therefore **does not invent facial deformation**. In the Blender/VRM path it creates standard editable zero-delta keys such as `blink`, `blinkLeft`, `blinkRight`, `happy`, `angry`, `sad`, vowel shapes, and related VRM presets, then binds them to VRM expressions. You can sculpt or replace those keys in Blender without rebuilding the conversion pipeline.
+
+For MMD, v0.3 adds `両目` / left-eye / right-eye controller bones and four gaze bone morphs (`LookLeft`, `LookRight`, `LookUp`, `LookDown`). These controls provide a standard rigging target, but visible eye movement still depends on the avatar having eye geometry/weights that can be assigned to those controls. Texture-only Roblox eyes cannot be automatically reconstructed into true eye geometry from OBJ alone.
+
+## Hair / tail / accessory physics
+
+The converter uses the manifest's accessory transforms and `AccessoryWeld` targets plus OBJ group bounds to detect likely dynamic accessories. For PMX it adds conservative rigid-body and spring-joint templates. For VRM it adds SpringBone1 chains through the VRM Add-on when available. Detection is intentionally conservative and excludes obvious swords, gloves, clothing, speech bubbles, and face props.
+
+Generated physics are **starting values**, not a substitute for model-specific tuning. Review collision behavior, stiffness, drag, gravity, pivots, and clipping in MMD/Blender before production use.
 
 ## Why reconstruction is necessary
 
-OBJ stores geometry and material references, not an armature or skin weights. The exporter manifest preserves Roblox body-part transforms, Motor6D/accessory weld information, attachment metadata, and reconstruction hints. This kit combines those sources rather than claiming lost weights can be recovered exactly.
-
-v0.2 improves deformation by blending body vertices against the reconstructed bone chain. Accessory meshes remain rigidly attached to their inferred weld target so hats, hair pieces, clothing accessories, and similar parts do not deform like skin.
+OBJ stores geometry and material references, not an armature, skin weights, or expression deltas. The exporter manifest preserves Roblox body-part transforms, Motor6D/accessory weld information, attachment metadata, and reconstruction hints. This kit combines those sources rather than claiming lost data can be recovered exactly.
 
 ## Conversion targets
 
 | Target | Status | Notes |
 |---|---|---|
-| Inspection / reconstruction plan | ✅ | Includes smooth-weight diagnostics |
-| Blender scene builder | ✅ prototype | Armature + reconstructed smooth body weights |
-| PMX 2.0 | ✅ experimental | Smooth weights, Japanese aliases, center + leg IK |
+| Inspection / reconstruction plan | ✅ | Includes smooth-weight and VTuber feature diagnostics |
+| Blender scene builder | ✅ prototype | Armature + reconstructed smooth body weights + expression scaffold |
+| PMX 2.0 | ✅ experimental | Smooth weights, Japanese aliases, center/IK, gaze controls, display frames, accessory physics |
 | GLB/glTF | ✅ via Blender | Optional automatic GLB export |
-| VRM 1.0 | ➡️ via Blender | Humanoid mapping when VRM Add-on is installed; rest-pose review still required |
+| VRM 1.0 | ✅ experimental via Blender | Humanoid map, LookAt, preset expression bindings, SpringBone and optional `.vrm` export |
 | VMD / Roblox animation conversion | Planned | Requires animation source data |
-| MMD morphs / expressions | Planned | Face mesh/morph reconstruction pass |
-| MMD physics | Planned | Hair/tail/accessory rigid-body generation |
-| VRM expressions / spring bones | Planned | VTuber-specific finishing pass |
+| Native facial morph recovery | Source-dependent | OBJ has no morph deltas; richer source data is required |
+| Automatic T/A-pose normalization | Planned | Current script diagnoses problematic rest poses |
+| Weight/physics heatmap diagnostics | Planned | Future visual QA pass |
 
 ## Diane validation
 
-The uploaded Diane export was used as the real-world regression model without publishing Diane's assets to this public repository. The v0.2 conversion preserves **36,773 triangles and 16 materials**, creates **20 PMX bones including two leg IK controllers**, and uses reconstructed BDEF2/BDEF4 influences around body joints while keeping accessory groups rigid.
+The uploaded Diane export is used as the real-world regression model without publishing Diane's source assets to this public repository. The v0.3 conversion preserves **36,773 triangles and 16 materials**, creates **29 PMX bones** including leg IK and eye controls, detects **6 dynamic accessory pieces**, generates **9 rigid bodies and 6 spring joints**, and adds **4 gaze morph controllers**. A structural PMX parser consumes the generated file to its exact end-of-file boundary after generation.
 
 ## Security model
 
 The converter treats avatar packages as untrusted input. ZIP extraction blocks path traversal and symlinks, limits file count and expanded size, and only accepts known model/image data file types. It does not execute files from an archive and does not fetch external URLs stored in manifests. See [SECURITY.md](SECURITY.md).
+
+Generated Blender scripts only reference files extracted from the local package and optional user-selected output paths. The converter does not require Roblox cookies, API keys, session tokens, or private credentials.
 
 ## Asset rights
 
