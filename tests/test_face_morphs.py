@@ -133,7 +133,7 @@ class FaceMorphTests(unittest.TestCase):
         ):
             self.assertEqual(by_name[name].panel, 3)
 
-    def test_shell_tracks_visible_feature_motion_at_useful_strength(self):
+    def test_skin_cage_closes_socket_and_shapes_mouth_with_features(self):
         mesh, skin_seam, mouth_vertices, _internal_mouth, eye_skin = self._build_face()
         regions, by_name = self._morphs(mesh)
 
@@ -141,9 +141,26 @@ class FaceMorphTests(unittest.TestCase):
         eye_feature_peak = max(
             abs(blink[index][1]) for index in regions.left_eye_surface if index in blink
         )
-        eye_shell_peak = max(abs(blink[index][1]) for index in eye_skin if index in blink)
+        left_eye_skin = {index for index in eye_skin if mesh.vertices[index][0] >= 0.0}
+        eye_shell_peak = max(abs(blink[index][1]) for index in left_eye_skin if index in blink)
         self.assertGreater(eye_feature_peak, 0.0)
-        self.assertGreater(eye_shell_peak, eye_feature_peak * 0.30)
+        self.assertGreater(eye_shell_peak, eye_feature_peak * 0.65)
+
+        eye_line = sum(mesh.vertices[index][1] for index in regions.left_eye_surface) / len(
+            regions.left_eye_surface
+        )
+        upper_socket = [
+            index for index in left_eye_skin
+            if mesh.vertices[index][1] > eye_line and index in blink
+        ]
+        lower_socket = [
+            index for index in left_eye_skin
+            if mesh.vertices[index][1] < eye_line and index in blink
+        ]
+        self.assertTrue(upper_socket)
+        self.assertTrue(lower_socket)
+        self.assertTrue(all(blink[index][1] < 0.0 for index in upper_socket))
+        self.assertTrue(all(blink[index][1] > 0.0 for index in lower_socket))
 
         mouth_open = dict(by_name["MouthOpen"].offsets)
         mouth_feature_peak = max(
@@ -151,9 +168,23 @@ class FaceMorphTests(unittest.TestCase):
         )
         mouth_shell_peak = max(abs(mouth_open[index][1]) for index in skin_seam if index in mouth_open)
         self.assertGreater(mouth_feature_peak, 0.0)
-        self.assertGreater(mouth_shell_peak, mouth_feature_peak * 0.25)
-        self.assertLessEqual(eye_shell_peak, regions.size[1] * 0.060 + 1e-8)
-        self.assertLessEqual(mouth_shell_peak, regions.size[1] * 0.055 + 1e-8)
+        self.assertGreater(mouth_shell_peak, mouth_feature_peak * 0.60)
+
+        lower_skin = [index for index in skin_seam if mesh.vertices[index][1] < 0.30]
+        upper_skin = [index for index in skin_seam if mesh.vertices[index][1] >= 0.30]
+        self.assertTrue(all(mouth_open[index][1] < 0.0 for index in lower_skin))
+        self.assertTrue(all(mouth_open[index][1] > 0.0 for index in upper_skin))
+
+        smile = dict(by_name["Smile"].offsets)
+        left_corner = min(skin_seam, key=lambda index: mesh.vertices[index][0])
+        right_corner = max(skin_seam, key=lambda index: mesh.vertices[index][0])
+        self.assertLess(smile[left_corner][0], 0.0)
+        self.assertGreater(smile[right_corner][0], 0.0)
+        self.assertGreater(smile[left_corner][1], 0.0)
+        self.assertGreater(smile[right_corner][1], 0.0)
+
+        self.assertLessEqual(eye_shell_peak, regions.size[1] * 0.12 + 1e-8)
+        self.assertLessEqual(mouth_shell_peak, regions.size[1] * 0.075 + 1e-8)
 
     def test_hidden_neutral_mouth_keeps_surface_attached_and_cavity_internal(self):
         mesh, skin_seam, mouth_vertices, internal_mouth, _eye_skin = self._build_face()
