@@ -2,7 +2,7 @@
 
 A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures + avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
 
-> **Current status: v0.3.2 prototype.** The kit now reconstructs a humanoid rig, smooth body weights, MMD IK, gaze controllers, dynamic accessory physics, VRM humanoid/look-at metadata, SpringBone chains, and an editable facial-expression scaffold. Roblox OBJ exports do **not** contain original skin weights or blend-shape deltas, so generated deformation and expression data are reconstructed scaffolding and should be reviewed before production use.
+> **Current status: v0.3.4 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD IK/gaze/physics, layered clothing, VRM metadata, and now a Windows PMXEditor acceptance + visual-validation pipeline. Roblox OBJ exports do **not** contain original skin weights or blend-shape deltas, so generated deformation and expression data remain reconstructed scaffolding and should be reviewed before production use.
 
 ## What it does
 
@@ -16,6 +16,7 @@ A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL
 - Creates experimental **PMX 2.0** in UTF-16LE with conservative BDEF weights, Japanese MMD bone aliases, center bone, leg IK, gaze controls, display frames, layered-clothing skinning, and collision-safe spring templates.
 - Generates a Blender build script with improved bone tails, smooth skinning, editable facial expression keys, VRM 1.0 humanoid mapping, VRM LookAt, SpringBone chains, and rest-pose diagnostics.
 - Can have the generated Blender script export **GLB** and, when the VRM Add-on for Blender is installed, **VRM 1.0**.
+- Can hand a freshly generated PMX to a **user-supplied PMXEditor on Windows**, collect PMXEditor's own object-count report, create a PMXEditor-resaved sidecar, capture the visible editor window, and compare counts against the writer's own statistics.
 - Never downloads arbitrary `meshId` / `textureId` URLs from the manifest.
 
 ## Quick start
@@ -38,6 +39,9 @@ rack prepare Diane.zip -o output/diane --vrm Diane.vrm
 # Direct MMD conversion with reconstructed weights, gaze controls, IK and accessory physics
 rack pmx Diane.zip -o output/diane/Diane.pmx
 
+# Windows: convert, then immediately validate/re-save/screenshot in your PMXEditor copy
+rack pmx Diane.zip -o output/diane/Diane.pmx --pmxeditor "C:\\Tools\\PmxEditor"
+
 # Disable generated accessory physics when a model needs manual setup
 rack pmx Diane.zip -o output/diane/Diane-no-physics.pmx --no-physics
 
@@ -46,6 +50,19 @@ rack pmx Diane.zip -o output/diane/Diane-rigid.pmx --rigid-weights
 ```
 
 For Blender, open `output/diane/build_in_blender.py` in Blender's Scripting workspace and run it. If the VRM Add-on for Blender is installed, the generated script configures the humanoid bone slots it can identify, LookAt, standard expression bindings, and SpringBone chains for detected dynamic accessories.
+
+## PMXEditor validation on Windows
+
+PMXEditor itself is **not bundled**. Point the converter at a PMXEditor folder/executable you already have:
+
+```powershell
+rack pmx Diane.zip -o .\output\Diane.pmx `
+  --pmxeditor "C:\Tools\PmxEditor"
+```
+
+The original `Diane.pmx` stays untouched. By default the pipeline writes `Diane.pmxeditor-report.json`, `Diane.pmxeditor.pmx`, and `Diane.pmxeditor.png` next to it. It also compares PMXEditor's parsed vertex/material/bone/morph/rigid-body/joint counts with the converter's own generation statistics and returns a non-zero exit code if those counts disagree.
+
+Use `--pmxeditor-close` for unattended runs, or `--no-pmxeditor-resave` / `--no-pmxeditor-screenshot` to skip those sidecars. The standalone `rack-pmxeditor` tool remains available for inspecting/installing the bridge or validating an existing PMX. See [docs/PMXEDITOR_BRIDGE.md](docs/PMXEDITOR_BRIDGE.md).
 
 ## Facial expressions and eye tracking
 
@@ -82,6 +99,7 @@ OBJ stores geometry and material references, not an armature, skin weights, or e
 | Inspection / reconstruction plan | ✅ | Includes smooth-weight and VTuber feature diagnostics |
 | Blender scene builder | ✅ prototype | Armature + reconstructed smooth body weights + expression scaffold |
 | PMX 2.0 | ✅ experimental | UTF-16LE, silhouette-safe weights, Japanese aliases, center/IK, gaze controls, display frames, conservative accessory physics |
+| PMXEditor validation | ✅ Windows integration | Acceptance report, PMXEditor re-save, screenshot, writer-vs-editor count comparison |
 | GLB/glTF | ✅ via Blender | Optional automatic GLB export |
 | VRM 1.0 | ✅ experimental via Blender | Humanoid map, LookAt, preset expression bindings, SpringBone and optional `.vrm` export |
 | VMD / Roblox animation conversion | Planned | Requires animation source data |
@@ -93,6 +111,8 @@ OBJ stores geometry and material references, not an armature, skin weights, or e
 
 The uploaded Diane export is used as the real-world regression model without publishing Diane's source assets to this public repository. The v0.3.2 conversion preserves **51,594 PMX vertices, 36,773 triangles and 16 materials**, creates **30 PMX bones** including leg IK, eye controls and short spring chains, generates **10 conservative rigid bodies and 7 spring joints**, and keeps **4 WrapLayer clothing groups** on region-constrained body weights. Only **3 secondary-motion accessories** receive spring chains; **3 silhouette-defining candidates remain rigid**. Every reconstructed body group keeps its configured primary-bone floor, including a **97% minimum head influence**. A structural PMX parser consumes the generated UTF-16LE file to its exact end-of-file boundary after generation.
 
+PMXEditor-backed validation is intentionally Windows-side: the Linux development/CI environment can test the bridge source, package discovery, CLI wiring, and count-comparison logic, while the actual PMXEditor/.NET/DirectX runtime is exercised on a Windows machine with the user's own PMXEditor installation.
+
 ## MMD text encoding
 
 PMX files are written with the PMX global text encoding flag set to `0` and all text encoded as **UTF-16LE**. This improves compatibility with MMD/PMX Editor setups that expect UTF-16 for Japanese bone, morph, display-frame, rigid-body and joint names.
@@ -101,7 +121,7 @@ PMX files are written with the PMX global text encoding flag set to `0` and all 
 
 The converter treats avatar packages as untrusted input. ZIP extraction blocks path traversal and symlinks, limits file count and expanded size, and only accepts known model/image data file types. It does not execute files from an archive and does not fetch external URLs stored in manifests. See [SECURITY.md](SECURITY.md).
 
-Generated Blender scripts only reference files extracted from the local package and optional user-selected output paths. The converter does not require Roblox cookies, API keys, session tokens, or private credentials.
+Generated Blender scripts only reference files extracted from the local package and optional user-selected output paths. The converter does not require Roblox cookies, API keys, session tokens, or private credentials. PMXEditor is launched only when the user explicitly supplies the `--pmxeditor` option or runs the standalone `rack-pmxeditor validate` command.
 
 ## Asset rights
 
