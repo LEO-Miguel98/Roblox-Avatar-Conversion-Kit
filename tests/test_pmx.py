@@ -45,6 +45,8 @@ class PmxTests(unittest.TestCase):
             drag_force=0.55,
             gravity_power=0.15,
             angular_limit=0.4,
+            physics_mode="spring",
+            segments=3,
         )
         features = FeaturePlan(
             eyes=EyeRig(
@@ -72,13 +74,14 @@ class PmxTests(unittest.TestCase):
             self.assertEqual(stats["triangles"], 2)
             self.assertEqual(stats["ik_bones"], 2)
             self.assertEqual(stats["gaze_morphs"], 4)
-            self.assertEqual(stats["dynamic_accessory_bones"], 1)
-            self.assertGreaterEqual(stats["rigid_bodies"], 2)
-            self.assertEqual(stats["physics_joints"], 1)
+            self.assertEqual(stats["dynamic_accessory_bones"], 3)
+            self.assertGreaterEqual(stats["rigid_bodies"], 4)
+            self.assertEqual(stats["physics_joints"], 3)
             self.assertNotIn(b"LookLeft", data)
             self.assertIn("LookLeft".encode("utf-16-le"), data)
             self.assertIn("表情".encode("utf-16-le"), data)
             self.assertEqual(stats["text_encoding"], "utf-16-le")
+            self.assertEqual(stats["material_edges"], "disabled")
             self.assertIn("rackJoint_Handle1".encode("utf-16-le"), data)
 
 

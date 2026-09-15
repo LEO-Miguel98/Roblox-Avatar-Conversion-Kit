@@ -13,7 +13,7 @@ from .manifest import discover_package, validate_manifest
 from .obj import parse_mtl, parse_obj
 from .pmx import write_pmx
 from .rig import build_bones, infer_manifest_translation, map_groups_to_bones
-from .weights import compute_group_vertex_weights, summarize_weights
+from .weights import compute_group_vertex_weights, primary_weight_diagnostics, summarize_weights
 
 
 def _load(zip_path: Path, workdir: Path):
@@ -53,6 +53,7 @@ def cmd_inspect(args) -> int:
             "group_to_bone": mapping,
             "bones": [bone.name for bone in bones],
             "reconstructed_weights": summarize_weights(smooth),
+            "primary_weight_diagnostics": primary_weight_diagnostics(mesh, smooth, mapping),
             "vtuber_features": features.to_dict(),
             "warnings": warnings,
         }
@@ -68,6 +69,7 @@ def cmd_prepare(args) -> int:
     smooth_weights = not args.rigid_weights
     accessory_physics = not args.no_physics
     expression_scaffold = not args.no_expression_scaffold
+    prepared_weights = compute_group_vertex_weights(mesh, bones, mapping, smooth=smooth_weights)
     plan = {
         "package": package.name,
         "source_obj": str(package.obj_path.relative_to(output)),
@@ -78,9 +80,8 @@ def cmd_prepare(args) -> int:
             for bone in bones
         ],
         "weight_mode": "smooth" if smooth_weights else "rigid",
-        "weight_summary": summarize_weights(
-            compute_group_vertex_weights(mesh, bones, mapping, smooth=smooth_weights)
-        ),
+        "weight_summary": summarize_weights(prepared_weights),
+        "primary_weight_diagnostics": primary_weight_diagnostics(mesh, prepared_weights, mapping),
         "accessory_physics": accessory_physics,
         "expression_scaffold": expression_scaffold,
         "vtuber_features": features.to_dict(),

@@ -6,10 +6,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from .features import FeaturePlan
+from .features import FeaturePlan, dynamic_chain
 from .obj import Material, ObjMesh
 from .rig import Bone
-from .weights import compute_group_vertex_weights, summarize_weights
+from .weights import VertexWeight, compute_group_vertex_weights, summarize_weights, weights_for_layered_point
 
 
 def _text(value: str) -> bytes:
@@ -93,7 +93,8 @@ def _pmx_bones(bones: list[Bone], features: FeaturePlan | None) -> list[_PmxBone
 
     if features:
         for dynamic in features.dynamics:
-            result.append(_PmxBone(dynamic.bone_name, dynamic.parent_bone, dynamic.root_position))
+            for segment in dynamic_chain(dynamic):
+                result.append(_PmxBone(segment["name"], segment["parent"], tuple(segment["position"])))
 
     for side in ("left", "right"):
         foot, lower, upper = f"{side}Foot", f"{side}LowerLeg", f"{side}UpperLeg"
@@ -115,14 +116,43 @@ def _eye_morphs(features: FeaturePlan | None) -> list[_BoneMorph]:
     ]
 
 
+def _chain_vertex_weights(point, dynamic) -> list[VertexWeight]:
+    chain = dynamic_chain(dynamic)
+    if not chain:
+        return []
+    if len(chain) == 1:
+        return [VertexWeight(chain[0]["name"], 1.0)]
+    root = dynamic.root_position
+    tail = dynamic.tail_position
+    axis = tuple(tail[i] - root[i] for i in range(3))
+    denom = sum(value * value for value in axis)
+    if denom <= 1e-12:
+        return [VertexWeight(chain[0]["name"], 1.0)]
+    rel = tuple(point[i] - root[i] for i in range(3))
+    t = max(0.0, min(1.0, sum(rel[i] * axis[i] for i in range(3)) / denom))
+    scaled = t * (len(chain) - 1)
+    left = min(int(scaled), len(chain) - 1)
+    right = min(left + 1, len(chain) - 1)
+    if left == right:
+        return [VertexWeight(chain[left]["name"], 1.0)]
+    blend = scaled - left
+    return [
+        VertexWeight(chain[left]["name"], 1.0 - blend),
+        VertexWeight(chain[right]["name"], blend),
+    ]
+
+
 def _physics(features: FeaturePlan | None, bones: list[_PmxBone]):
-    if not features or not features.dynamics:
+    if not features:
         return [], []
     bone_positions = {bone.name: bone.position for bone in bones}
     rigid: list[_RigidBody] = []
     joints: list[_Joint] = []
     anchors = {}
     for dynamic in features.dynamics:
+        chain = dynamic_chain(dynamic)
+        if not chain:
+            continue
         parent = dynamic.parent_bone
         if parent not in anchors:
             anchor_name = f"rackAnchor_{parent}"
@@ -130,39 +160,45 @@ def _physics(features: FeaturePlan | None, bones: list[_PmxBone]):
             rigid.append(_RigidBody(
                 name=anchor_name,
                 bone_name=parent,
-                shape_size=(0.09, 0.09, 0.09),
+                shape_size=(0.04, 0.04, 0.04),
                 position=bone_positions.get(parent, dynamic.root_position),
                 operation=0,
                 mass=0.0,
                 linear_damping=1.0,
                 angular_damping=1.0,
                 group=0,
-                collision_mask=0,
+                collision_mask=0xFFFF,
             ))
-        # PMX box size uses half extents. Shrink it slightly so broad accessory boxes don't over-collide.
-        half = tuple(max(min(float(v) * 0.22, 0.65), 0.04) for v in dynamic.size)
-        mass = max(0.08, min((dynamic.size[0] * dynamic.size[1] * dynamic.size[2]) * 0.08, 1.6))
-        body_name = f"rackBody_{dynamic.group}"
-        rigid.append(_RigidBody(
-            name=body_name,
-            bone_name=dynamic.bone_name,
-            shape_size=half,
-            position=dynamic.center_position,
-            operation=1,
-            mass=mass,
-            linear_damping=dynamic.drag_force,
-            angular_damping=min(dynamic.drag_force + 0.1, 0.95),
-            group=1,
-            collision_mask=0,
-        ))
-        joints.append(_Joint(
-            name=f"rackJoint_{dynamic.group}",
-            rigid_a=anchors[parent],
-            rigid_b=body_name,
-            position=dynamic.root_position,
-            angular_limit=dynamic.angular_limit,
-            spring=8.0 + 22.0 * dynamic.stiffness,
-        ))
+        previous_body = anchors[parent]
+        segment_count = max(len(chain), 1)
+        for index, segment in enumerate(chain):
+            body_name = f"rackBody_{dynamic.group}_{index + 1:02d}"
+            # Conservative half-extents plus collision masking prevent overlapping generated
+            # accessories from exploding apart when MMD enables physics on frame 1.
+            half = tuple(max(min(float(v) * 0.12 / segment_count, 0.22), 0.025) for v in dynamic.size)
+            volume = max(dynamic.size[0] * dynamic.size[1] * dynamic.size[2], 0.001)
+            mass = max(0.03, min(volume * 0.025 / segment_count, 0.35))
+            rigid.append(_RigidBody(
+                name=body_name,
+                bone_name=segment["name"],
+                shape_size=half,
+                position=tuple(segment["position"]),
+                operation=1,
+                mass=mass,
+                linear_damping=max(dynamic.drag_force, 0.65),
+                angular_damping=max(min(dynamic.drag_force + 0.2, 0.95), 0.75),
+                group=1,
+                collision_mask=0xFFFF,
+            ))
+            joints.append(_Joint(
+                name=f"rackJoint_{dynamic.group}_{index + 1:02d}",
+                rigid_a=previous_body,
+                rigid_b=body_name,
+                position=tuple(segment["position"]),
+                angular_limit=min(dynamic.angular_limit * 0.45, 0.28),
+                spring=12.0 + 30.0 * dynamic.stiffness,
+            ))
+            previous_body = body_name
     return rigid, joints
 
 
@@ -201,9 +237,11 @@ def write_pmx(
     pmx_bones = _pmx_bones(bones, features)
     bone_index = {bone.name: index for index, bone in enumerate(pmx_bones)}
     effective_mapping = dict(group_to_bone)
-    if features and accessory_physics:
-        for dynamic in features.dynamics:
-            effective_mapping[dynamic.group] = dynamic.bone_name
+    spring_dynamics = {
+        dynamic.group: dynamic
+        for dynamic in (features.dynamics if features and accessory_physics else ())
+        if dynamic.physics_mode == "spring"
+    }
 
     textures: list[str] = []
     for material in materials.values():
@@ -211,6 +249,16 @@ def write_pmx(
     texture_index = {name: index for index, name in enumerate(textures)}
 
     source_weights = compute_group_vertex_weights(mesh, bones, effective_mapping, smooth=smooth_weights)
+    layered_items = {item.group: item for item in (features.layered_clothing if features else ())}
+    layered_groups = set(layered_items)
+    for group, item in layered_items.items():
+        for index in mesh.group_vertex_indices().get(group, ()):
+            source_weights[(group, index)] = weights_for_layered_point(mesh.vertices[index], bones, profile=item.profile)
+    # Only explicitly safe spring candidates get secondary-motion weights. Silhouette-defining
+    # hair shells, bangs, ears, swords and face props remain rigid on their weld target.
+    for group, dynamic in spring_dynamics.items():
+        for index in mesh.group_vertex_indices().get(group, ()):
+            source_weights[(group, index)] = _chain_vertex_weights(mesh.vertices[index], dynamic)
     vertex_map = {}; out_vertices = []; indices_by_material = defaultdict(list)
     for face in mesh.faces:
         face_indices = []
@@ -233,7 +281,7 @@ def write_pmx(
     blob = bytearray(b"PMX ")
     blob += struct.pack("<fB", 2.0, 8)
     blob += bytes([0, 0, 4, 4, 4, 4, 4, 4])
-    comment = "Generated by Roblox Avatar Conversion Kit v0.3.1. Skin weights and accessory physics are reconstructed and approximate."
+    comment = "Generated by Roblox Avatar Conversion Kit v0.3.2. Skin weights and accessory physics are reconstructed and approximate."
     blob += _text(model_name) + _text(model_name) + _text(comment) + _text(comment)
 
     blob += struct.pack("<i", len(out_vertices))
@@ -256,8 +304,8 @@ def write_pmx(
         material = materials.get(material_name or "") or Material(material_name or f"Material{number + 1}")
         blob += _text(material.name) + _text(material.name)
         blob += _vec4((*material.kd, material.alpha)) + _vec3(material.ks) + struct.pack("<f", max(0.0, material.ns))
-        blob += _vec3(tuple(channel * 0.5 for channel in material.kd)) + struct.pack("<B", 0x1F)
-        blob += _vec4((0.0, 0.0, 0.0, 1.0)) + struct.pack("<f", 1.0)
+        blob += _vec3(tuple(channel * 0.35 for channel in material.kd)) + struct.pack("<B", 0x0F)
+        blob += _vec4((0.0, 0.0, 0.0, 1.0)) + struct.pack("<f", 0.0)
         blob += struct.pack("<iiBBB", texture_index.get(material.map_kd, -1), -1, 0, 1, 0)
         blob += _text("") + struct.pack("<i", len(indices_by_material[material_name]))
 
@@ -291,7 +339,7 @@ def write_pmx(
     face_bones = [name for name in ("head", "eyes", "leftEye", "rightEye") if name in bone_index]
     if face_bones:
         frames.append(("顔", "Face", 0, [(0, bone_index[name]) for name in face_bones]))
-    physics_bones = [d.bone_name for d in (features.dynamics if features and accessory_physics else ()) if d.bone_name in bone_index]
+    physics_bones = [segment["name"] for d in (features.dynamics if features and accessory_physics else ()) for segment in dynamic_chain(d) if segment["name"] in bone_index]
     if physics_bones:
         frames.append(("物理", "Physics", 0, [(0, bone_index[name]) for name in physics_bones]))
     blob += struct.pack("<i", len(frames))
@@ -323,6 +371,9 @@ def write_pmx(
         "materials": len(material_order), "textures": len(textures), "bones": len(pmx_bones),
         "ik_bones": sum(1 for bone in pmx_bones if bone.ik_target), "gaze_morphs": len(morphs),
         "dynamic_accessory_bones": len(physics_bones), "rigid_bodies": len(rigid_bodies), "physics_joints": len(joints),
+        "spring_accessories": len(spring_dynamics),
+        "rigid_preserved_accessories": sum(1 for d in (features.dynamics if features else ()) if d.physics_mode != "spring"),
+        "layered_clothing_groups": len(layered_groups),
         "weight_modes": dict(sorted(pmx_weight_counts.items())), "source_weight_summary": summarize_weights(source_weights),
-        "text_encoding": "utf-16-le", "bytes": len(blob),
+        "material_edges": "disabled", "text_encoding": "utf-16-le", "bytes": len(blob),
     }
