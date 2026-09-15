@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from math import sqrt
+from math import log, sqrt
 from typing import Any
 
 from .obj import ObjMesh
@@ -44,11 +44,22 @@ class DynamicAccessory:
     drag_force: float
     gravity_power: float
     angular_limit: float
+    physics_mode: str = "spring"
+    segments: int = 1
+
+@dataclass(frozen=True)
+class LayeredClothing:
+    name: str
+    group: str
+    accessory_type: str
+    profile: str = "upper_body"
+
 
 @dataclass(frozen=True)
 class FeaturePlan:
     eyes: EyeRig | None
     dynamics: tuple[DynamicAccessory, ...]
+    layered_clothing: tuple[LayeredClothing, ...] = ()
     expression_presets: tuple[str, ...] = EXPRESSION_PRESETS
     native_expression_source: bool = False
 
@@ -75,8 +86,15 @@ class FeaturePlan:
                     "drag_force": d.drag_force,
                     "gravity_power": d.gravity_power,
                     "angular_limit": d.angular_limit,
+                    "physics_mode": d.physics_mode,
+                    "segments": d.segments,
+                    "chain": dynamic_chain(d),
                 }
                 for d in self.dynamics
+            ],
+            "layered_clothing": [
+                {"name": item.name, "group": item.group, "accessory_type": item.accessory_type, "profile": item.profile}
+                for item in self.layered_clothing
             ],
             "expression_presets": list(self.expression_presets),
             "native_expression_source": self.native_expression_source,
@@ -100,6 +118,79 @@ def _group_bounds(mesh: ObjMesh):
         size = tuple(hi[i] - lo[i] for i in range(3))
         out[group] = (lo, hi, center, size)
     return out
+
+
+def match_accessories_to_groups(manifest: dict[str, Any], mesh: ObjMesh, translation) -> dict[int, str]:
+    """Greedy one-to-one accessory/group matching using center and orientation-invariant size.
+
+    Roblox exports commonly contain several layered clothing handles near the torso. Center-only matching
+    can swap jacket/shorts/gloves groups, so size is part of the score and each group is used once.
+    """
+    bounds = {name: value for name, value in _group_bounds(mesh).items() if name.lower().startswith("handle")}
+    pairs = []
+    for index, accessory in enumerate(manifest.get("accessories", [])):
+        handle = accessory.get("handle") or {}
+        if not handle.get("cframe"):
+            continue
+        center = _transform_point(handle["cframe"][:3], translation)
+        size = tuple(max(float(value), 1e-5) for value in handle.get("size", [1, 1, 1]))
+        sorted_size = sorted(size)
+        for group, (_, _, group_center, group_size) in bounds.items():
+            center_score = sum(((group_center[i] - center[i]) / size[i]) ** 2 for i in range(3))
+            sorted_group = sorted(max(float(value), 1e-5) for value in group_size)
+            size_score = 0.0
+            for i in range(3):
+                ratio = sorted_group[i] / sorted_size[i]
+                # Degenerate/single-plane OBJ test geometry should not dominate the match.
+                ratio = max(0.1, min(ratio, 10.0))
+                size_score += log(ratio) ** 2
+            pairs.append((center_score + 0.35 * size_score, index, group))
+
+    assigned = {}
+    used_groups = set()
+    for score, index, group in sorted(pairs):
+        if index in assigned or group in used_groups:
+            continue
+        # A generous ceiling keeps rotated/sparse exports usable while rejecting obviously unrelated groups.
+        if score > 4.0:
+            continue
+        assigned[index] = group
+        used_groups.add(group)
+    return assigned
+
+
+def _clothing_profile(name: str, accessory_type: str) -> str:
+    lower = name.lower()
+    kind = accessory_type.lower()
+    if any(token in lower for token in ("legging", "pants", "trouser")):
+        return "legs"
+    if "glove" in lower:
+        return "hands"
+    if "short" in lower or "shorts" in kind:
+        return "lower_body"
+    if any(token in lower for token in ("shoe", "boot", "sock")):
+        return "feet"
+    return "upper_body"
+
+
+def detect_layered_clothing(manifest: dict[str, Any], mesh: ObjMesh, translation) -> tuple[LayeredClothing, ...]:
+    assignment = match_accessories_to_groups(manifest, mesh, translation)
+    output = []
+    for index, accessory in enumerate(manifest.get("accessories", [])):
+        if not accessory.get("wrap"):
+            continue
+        group = assignment.get(index)
+        if not group:
+            continue
+        name = str(accessory.get("name") or "LayeredClothing")
+        accessory_type = str(accessory.get("accessoryType") or "")
+        output.append(LayeredClothing(
+            name=name,
+            group=group,
+            accessory_type=accessory_type,
+            profile=_clothing_profile(name, accessory_type),
+        ))
+    return tuple(output)
 
 
 def _target_bone(manifest, accessory):
@@ -136,6 +227,38 @@ def build_eye_rig(manifest: dict[str, Any], translation) -> EyeRig | None:
         right_position=(center[0] + dx, y, z),
         head_position=center,
     )
+
+
+def dynamic_chain(dynamic: DynamicAccessory) -> list[dict[str, Any]]:
+    if dynamic.physics_mode != "spring":
+        return []
+    count = max(1, int(dynamic.segments))
+    root = dynamic.root_position
+    tail = dynamic.tail_position
+    chain = []
+    for index in range(count):
+        t = 0.0 if count == 1 else index / (count - 1)
+        position = tuple(root[i] + (tail[i] - root[i]) * t for i in range(3))
+        name = dynamic.bone_name if index == 0 else f"{dynamic.bone_name}_{index + 1:02d}"
+        parent = dynamic.parent_bone if index == 0 else chain[-1]["name"]
+        chain.append({"name": name, "parent": parent, "position": position, "t": t})
+    return chain
+
+
+def _physics_profile(lower_name: str, size: tuple[float, float, float]) -> tuple[str, int]:
+    if "tail" in lower_name:
+        return "spring", 3
+    if "cowlick" in lower_name:
+        return "spring", 2
+    # Preserve large silhouette-defining head shells rigidly. Whole-hair, bangs and ears rotating as
+    # one physics object were the main source of the visibly collapsed v0.3 Diane conversion.
+    if any(key in lower_name for key in ("wolf cut", "fluffy", "hair", "bang", "ear")):
+        return "rigid", 0
+    if any(key in lower_name for key in ("pixie", "ribbon", "scarf", "cape", "wing", "ponytail")):
+        longest = max(size)
+        shortest = max(min(size), 1e-5)
+        return "spring", 3 if longest / shortest >= 3.0 else 2
+    return "rigid", 0
 
 
 def detect_dynamic_accessories(
@@ -191,6 +314,7 @@ def detect_dynamic_accessories(
         else:
             stiffness, drag, gravity, limit = 0.50, 0.55, 0.15, 0.42
 
+        physics_mode, segments = _physics_profile(lower_name, size)
         bone_name = f"rackDynamic_{group}_{_safe_name(name)}"
         found.append(
             (
@@ -209,6 +333,8 @@ def detect_dynamic_accessories(
                     drag_force=drag,
                     gravity_power=gravity,
                     angular_limit=limit,
+                    physics_mode=physics_mode,
+                    segments=segments,
                 ),
             )
         )
@@ -230,5 +356,6 @@ def analyze_features(manifest, mesh, translation, bones) -> FeaturePlan:
     return FeaturePlan(
         eyes=build_eye_rig(manifest, translation),
         dynamics=detect_dynamic_accessories(manifest, mesh, translation, bones),
+        layered_clothing=detect_layered_clothing(manifest, mesh, translation),
         native_expression_source=False,
     )
