@@ -56,7 +56,19 @@ class FaceMorphTests(unittest.TestCase):
                     "FaceMtl",
                 ))
 
-        # A small skin seam in the mouth area must never be included in mouth morphs.
+        # Small opaque shell patches around each eye represent the eyelid/cheek surface. They are
+        # not eye geometry, but coordinated morphs should move them subtly with a blink.
+        eye_skin = set()
+        for side in (-1.0, 1.0):
+            cx = 0.35 * side
+            eye_skin |= triangle([
+                (cx - 0.12, 0.72, -0.46),
+                (cx + 0.12, 0.72, -0.46),
+                (cx, 1.04, -0.46),
+            ], material="FaceMtl__RACK_SKIN")
+
+        # A small skin seam in the mouth area must remain skin, while coordinated mouth morphs are
+        # allowed to deform it gently so the lips do not look detached from the face.
         skin_seam = triangle([
             (-0.025, 0.22, -0.49),
             (0.025, 0.22, -0.49),
@@ -71,10 +83,10 @@ class FaceMorphTests(unittest.TestCase):
                 (x + 0.03, 0.20, -0.49),
                 (x, 0.28, -0.49),
             ])
-        return mesh, skin_seam, mouth_vertices
+        return mesh, skin_seam, mouth_vertices, eye_skin
 
     def test_reconstructs_separate_eye_brow_and_mouth_controls(self):
-        mesh, skin_seam, mouth_vertices = self._build_face()
+        mesh, skin_seam, mouth_vertices, eye_skin = self._build_face()
         source_to_pmx = defaultdict(list)
         for index in range(len(mesh.vertices)):
             source_to_pmx[("RigHead", index)].append(index)
@@ -103,7 +115,11 @@ class FaceMorphTests(unittest.TestCase):
         }
         self.assertEqual(set(by_name), expected)
         self.assertGreater(len(by_name["Blink"].offsets), 20)
+        blink_indices = {index for index, _ in by_name["Blink"].offsets}
+        self.assertTrue(eye_skin.issubset(blink_indices))
         self.assertGreater(len(by_name["MouthOpen"].offsets), 10)
+        mouth_open_indices = {index for index, _ in by_name["MouthOpen"].offsets}
+        self.assertTrue(skin_seam.issubset(mouth_open_indices))
         for name in ("BrowRaise", "BrowLower", "BrowSad", "BrowAngry", "BrowSerious"):
             self.assertEqual(by_name[name].panel, 1)
         for name in ("Blink", "EyeWide", "HalfLid", "HappyEyes"):
@@ -115,7 +131,7 @@ class FaceMorphTests(unittest.TestCase):
             self.assertEqual(by_name[name].panel, 3)
 
     def test_hidden_neutral_mouth_reveals_only_actual_mouth_not_skin_shell(self):
-        mesh, skin_seam, _ = self._build_face()
+        mesh, skin_seam, _, _eye_skin = self._build_face()
         mapping = {"RigHead": "head"}
         regions = _analyze_face_regions(mesh, mapping)
         self.assertIsNotNone(regions)
@@ -135,8 +151,11 @@ class FaceMorphTests(unittest.TestCase):
         )
         mouth_open = next(morph for morph in morphs if morph.name_en == "MouthOpen")
         moved_indices = {index for index, _ in mouth_open.offsets}
-        self.assertTrue(skin_seam.isdisjoint(moved_indices))
-        self.assertTrue(any(delta[2] > 0.05 for _, delta in mouth_open.offsets))
+        self.assertTrue(skin_seam.issubset(moved_indices))
+        skin_deltas = [delta for index, delta in mouth_open.offsets if index in skin_seam]
+        self.assertTrue(skin_deltas)
+        self.assertTrue(all(abs(delta[2]) < 1e-6 for delta in skin_deltas))
+        self.assertTrue(any(delta[2] > 0.05 for index, delta in mouth_open.offsets if index not in skin_seam))
 
 
 if __name__ == "__main__":
