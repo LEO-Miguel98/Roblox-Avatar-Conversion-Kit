@@ -10,15 +10,21 @@ class FaceRegions:
     size: tuple[float, float, float]
     left_eye: frozenset[int]
     right_eye: frozenset[int]
+    left_eye_surface: frozenset[int]
+    right_eye_surface: frozenset[int]
     left_brow: frozenset[int]
     right_brow: frozenset[int]
+    # `mouth` intentionally remains the subset that write_pmx hides in the neutral pose.
+    # Keeping that compatibility lets us hide only the internal cavity without touching the writer.
     mouth: frozenset[int]
+    mouth_all: frozenset[int]
+    mouth_surface: frozenset[int]
     mouth_components: int
     hide_depth: float
 
 
 def install(pmx):
-    """Install the v0.3.13 face-region/morph reconstruction into the PMX writer."""
+    """Install face-region analysis and reconstructed facial morphs into the PMX writer."""
 
     def analyze_face_regions(mesh, group_to_bone):
         groups = mesh.group_vertex_indices()
@@ -69,7 +75,7 @@ def install(pmx):
                 and len(component) >= 7
             )
             if is_brow:
-                brows.append((component, comp_center))
+                brows.append((component, comp_center, comp_size))
                 continue
 
             if (
@@ -79,7 +85,7 @@ def install(pmx):
                 and comp_size[0] <= 0.40 * width
                 and comp_size[1] <= 0.34 * height
             ):
-                eyes.append((component, comp_center))
+                eyes.append((component, comp_center, comp_size))
 
             if (
                 comp_center[2] <= front_cut
@@ -88,25 +94,82 @@ def install(pmx):
                 and comp_size[0] <= 0.32 * width
                 and comp_size[1] <= 0.22 * height
             ):
-                mouths.append((component, comp_center))
+                mouths.append((component, comp_center, comp_size))
 
         left_eye = (
-            set().union(*(component for component, comp_center in eyes if comp_center[0] >= center[0]))
+            set().union(*(component for component, comp_center, _ in eyes if comp_center[0] >= center[0]))
             if eyes else set()
         )
         right_eye = (
-            set().union(*(component for component, comp_center in eyes if comp_center[0] < center[0]))
+            set().union(*(component for component, comp_center, _ in eyes if comp_center[0] < center[0]))
             if eyes else set()
         )
+
+        # Prefer thin, front-most eye pieces as the motion driver for the surrounding socket skin.
+        # The full eye region still receives the expression morph; this only avoids deeper eyeball/
+        # accessory pieces pulling the facial shell in the wrong direction.
+        eye_surface_components = [
+            (component, comp_center)
+            for component, comp_center, comp_size in eyes
+            if (
+                (comp_center[2] - lo[2]) <= 0.16 * depth
+                and comp_size[2] <= 0.04 * depth
+            )
+        ]
+        left_eye_surface = (
+            set().union(*(
+                component
+                for component, comp_center in eye_surface_components
+                if comp_center[0] >= center[0]
+            ))
+            if eye_surface_components else set()
+        )
+        right_eye_surface = (
+            set().union(*(
+                component
+                for component, comp_center in eye_surface_components
+                if comp_center[0] < center[0]
+            ))
+            if eye_surface_components else set()
+        )
+        if len(left_eye_surface) < 12:
+            left_eye_surface = set(left_eye)
+        if len(right_eye_surface) < 12:
+            right_eye_surface = set(right_eye)
+
         left_brow = (
-            set().union(*(component for component, comp_center in brows if comp_center[0] >= center[0]))
+            set().union(*(component for component, comp_center, _ in brows if comp_center[0] >= center[0]))
             if brows else set()
         )
         right_brow = (
-            set().union(*(component for component, comp_center in brows if comp_center[0] < center[0]))
+            set().union(*(component for component, comp_center, _ in brows if comp_center[0] < center[0]))
             if brows else set()
         )
-        mouth = set().union(*(component for component, _ in mouths)) if mouths else set()
+
+        mouth_all = set().union(*(component for component, _, _ in mouths)) if mouths else set()
+        # Dynamic heads often contain a thin lip/front-face layer plus deeper mouth/teeth/tongue
+        # pieces. The old implementation hid the entire union, which made even the visible lip
+        # surface travel through the head on every expression. Keep thin front pieces on the face
+        # and hide only the deeper cavity when we can distinguish them safely.
+        mouth_surface_components = [
+            component
+            for component, comp_center, comp_size in mouths
+            if (
+                (comp_center[2] - lo[2]) <= 0.12 * depth
+                and comp_size[2] <= 0.03 * depth
+            )
+        ]
+        mouth_surface = (
+            set().union(*mouth_surface_components) if mouth_surface_components else set()
+        )
+        if len(mouth_surface) < 12:
+            mouth_surface = set(mouth_all)
+        mouth_hidden = set(mouth_all) - set(mouth_surface)
+        # If an export does not provide a separable surface/cavity layout, retain the conservative
+        # legacy behavior rather than leaving unknown internal geometry visible through the face.
+        if len(mouth_hidden) < 12 and len(mouth_all) >= 12:
+            mouth_hidden = set(mouth_all)
+
         hide_depth = min(max(depth * 0.36, 0.12), depth * 0.48)
         return FaceRegions(
             group=group,
@@ -114,9 +177,13 @@ def install(pmx):
             size=size,
             left_eye=frozenset(left_eye),
             right_eye=frozenset(right_eye),
+            left_eye_surface=frozenset(left_eye_surface),
+            right_eye_surface=frozenset(right_eye_surface),
             left_brow=frozenset(left_brow),
             right_brow=frozenset(right_brow),
-            mouth=frozenset(mouth),
+            mouth=frozenset(mouth_hidden),
+            mouth_all=frozenset(mouth_all),
+            mouth_surface=frozenset(mouth_surface),
             mouth_components=len(mouths),
             hide_depth=hide_depth,
         )
@@ -149,10 +216,11 @@ def install(pmx):
                     offsets.append((pmx_index, pmx._mmd_vec3(delta)))
             return offsets
 
-        def blink(name_jp, name_en, source):
+        def blink(name_jp, name_en, source, reference):
             if len(source) < 12:
                 return None
-            ys = [mesh.vertices[index][1] for index in source]
+            reference = reference if len(reference) >= 12 else source
+            ys = [mesh.vertices[index][1] for index in reference]
             line = sum(ys) / len(ys)
             offsets = append_source_offsets(
                 source,
@@ -160,8 +228,12 @@ def install(pmx):
             )
             return pmx._VertexMorph(name_jp, name_en, 2, offsets) if offsets else None
 
-        left_blink = blink("ウィンク", "BlinkLeft", regions.left_eye)
-        right_blink = blink("ウィンク右", "BlinkRight", regions.right_eye)
+        left_blink = blink(
+            "ウィンク", "BlinkLeft", regions.left_eye, regions.left_eye_surface
+        )
+        right_blink = blink(
+            "ウィンク右", "BlinkRight", regions.right_eye, regions.right_eye_surface
+        )
         if left_blink and right_blink:
             morphs.append(pmx._VertexMorph(
                 "まばたき", "Blink", 2, left_blink.offsets + right_blink.offsets
@@ -172,14 +244,19 @@ def install(pmx):
         elif right_blink:
             morphs.append(right_blink)
 
-        eye_sides = [source for source in (regions.left_eye, regions.right_eye) if len(source) >= 12]
+        eye_sides = [
+            (regions.left_eye, regions.left_eye_surface),
+            (regions.right_eye, regions.right_eye_surface),
+        ]
+        eye_sides = [(source, ref) for source, ref in eye_sides if len(source) >= 12]
         if eye_sides:
             surprise = []
             half_lid = []
             happy = []
-            for source in eye_sides:
-                ys = [mesh.vertices[index][1] for index in source]
-                xs = [mesh.vertices[index][0] for index in source]
+            for source, reference in eye_sides:
+                reference = reference if len(reference) >= 12 else source
+                ys = [mesh.vertices[index][1] for index in reference]
+                xs = [mesh.vertices[index][0] for index in reference]
                 line = sum(ys) / len(ys)
                 xmid = sum(xs) / len(xs)
                 xspan = max(max(xs) - min(xs), 1e-6)
@@ -236,13 +313,14 @@ def install(pmx):
                 pmx._VertexMorph("真面目", "BrowSerious", 1, brow_serious),
             ])
 
-        mouth = regions.mouth
+        mouth = regions.mouth_all
         if len(mouth) < 12:
             return morphs
 
-        ys = [mesh.vertices[index][1] for index in mouth]
+        mouth_reference = regions.mouth_surface if len(regions.mouth_surface) >= 12 else mouth
+        ys = [mesh.vertices[index][1] for index in mouth_reference]
         line = sum(ys) / len(ys)
-        reveal_z = -regions.hide_depth if mouth_hidden_at_neutral else 0.0
+        hidden_mouth = regions.mouth if mouth_hidden_at_neutral else frozenset()
         a_offsets = []
         i_offsets = []
         u_offsets = []
@@ -272,6 +350,7 @@ def install(pmx):
             dx_wide = 0.030 * width * xnorm * sign_x
             dy_smile = 0.045 * height * (xnorm ** 1.25)
             dx_smile = 0.015 * width * xnorm * sign_x
+            reveal_z = -regions.hide_depth if vertex_index in hidden_mouth else 0.0
 
             for pmx_index in source_to_pmx.get((group, vertex_index), ()):
                 a_offsets.append((pmx_index, pmx._mmd_vec3((0.0, dy_a, reveal_z))))
@@ -279,9 +358,11 @@ def install(pmx):
                 u_offsets.append((pmx_index, pmx._mmd_vec3((dx_u, dy_u, reveal_z))))
                 e_offsets.append((pmx_index, pmx._mmd_vec3((dx_e, dy_e, reveal_z))))
                 o_offsets.append((pmx_index, pmx._mmd_vec3((dx_o, dy_o, reveal_z))))
-                n_offsets.append((pmx_index, pmx._mmd_vec3((0.0, dy_n, reveal_z))))
+                # Closed-mouth and closed-smile shapes must not pull the hidden mouth cavity back
+                # through the face. Only open vowel/wide shapes reveal internal geometry.
+                n_offsets.append((pmx_index, pmx._mmd_vec3((0.0, dy_n, 0.0))))
                 wide_offsets.append((pmx_index, pmx._mmd_vec3((dx_wide, -0.006 * height, reveal_z))))
-                smile_offsets.append((pmx_index, pmx._mmd_vec3((dx_smile, dy_smile, reveal_z))))
+                smile_offsets.append((pmx_index, pmx._mmd_vec3((dx_smile, dy_smile, 0.0))))
 
         if a_offsets:
             morphs.append(pmx._VertexMorph("あ", "MouthOpen", 3, a_offsets))
