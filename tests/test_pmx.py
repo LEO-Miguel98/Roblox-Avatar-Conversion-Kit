@@ -68,14 +68,18 @@ class PmxTests(unittest.TestCase):
             )
             data = out.read_bytes()
             self.assertEqual(data[:4], b"PMX ")
+            self.assertEqual(data[9], 0)  # PMX global encoding flag: 0 = UTF-16LE
             self.assertEqual(stats["triangles"], 2)
             self.assertEqual(stats["ik_bones"], 2)
             self.assertEqual(stats["gaze_morphs"], 4)
             self.assertEqual(stats["dynamic_accessory_bones"], 1)
             self.assertGreaterEqual(stats["rigid_bodies"], 2)
             self.assertEqual(stats["physics_joints"], 1)
-            self.assertIn(b"LookLeft", data)
-            self.assertIn(b"rackJoint_Handle1", data)
+            self.assertNotIn(b"LookLeft", data)
+            self.assertIn("LookLeft".encode("utf-16-le"), data)
+            self.assertIn("表情".encode("utf-16-le"), data)
+            self.assertEqual(stats["text_encoding"], "utf-16-le")
+            self.assertIn("rackJoint_Handle1".encode("utf-16-le"), data)
 
 
 if __name__ == "__main__":

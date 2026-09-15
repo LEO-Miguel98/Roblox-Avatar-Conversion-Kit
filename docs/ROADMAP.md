@@ -38,6 +38,12 @@
 - Weight and physics heatmap / deformation diagnostics
 - More sophisticated multi-segment hair, skirt and tail chains
 
+## v0.3.1 — MMD compatibility hotfix ✅
+- PMX text encoding switched from UTF-8 to UTF-16LE
+- PMX header encoding flag switched from `1` to `0`
+- Regression coverage verifies Japanese and English PMX names are actually UTF-16LE
+- Diane PMX structurally validated to exact end-of-file after the encoding change
+
 ## v0.4 — animation conversion
 - Roblox animation keyframe ingestion
 - Retargeting to reconstructed humanoid

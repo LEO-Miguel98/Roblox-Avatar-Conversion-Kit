@@ -2,7 +2,7 @@
 
 A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures + avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
 
-> **Current status: v0.3 prototype.** The kit now reconstructs a humanoid rig, smooth body weights, MMD IK, gaze controllers, dynamic accessory physics, VRM humanoid/look-at metadata, SpringBone chains, and an editable facial-expression scaffold. Roblox OBJ exports do **not** contain original skin weights or blend-shape deltas, so generated deformation and expression data are reconstructed scaffolding and should be reviewed before production use.
+> **Current status: v0.3.1 prototype.** The kit now reconstructs a humanoid rig, smooth body weights, MMD IK, gaze controllers, dynamic accessory physics, VRM humanoid/look-at metadata, SpringBone chains, and an editable facial-expression scaffold. Roblox OBJ exports do **not** contain original skin weights or blend-shape deltas, so generated deformation and expression data are reconstructed scaffolding and should be reviewed before production use.
 
 ## What it does
 
@@ -13,7 +13,7 @@ A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL
 - Matches `Handle*` groups to accessories and follows Roblox `AccessoryWeld` targets.
 - Reconstructs **smooth body weights with up to four bone influences** while keeping ordinary accessories rigid.
 - Detects likely dynamic hair, bangs, cowlicks, ears, tails, ribbons, wings, scarves, capes, and similar accessories from manifest + mesh placement.
-- Creates experimental **PMX 2.0** with BDEF1/BDEF2/BDEF4 weights, Japanese MMD bone aliases, center bone, leg IK, gaze-control bone morphs, display frames, and generated accessory rigid bodies/joints.
+- Creates experimental **PMX 2.0** with **UTF-16LE text by default for MMD compatibility**, BDEF1/BDEF2/BDEF4 weights, Japanese MMD bone aliases, center bone, leg IK, gaze-control bone morphs, display frames, and generated accessory rigid bodies/joints.
 - Generates a Blender build script with improved bone tails, smooth skinning, editable facial expression keys, VRM 1.0 humanoid mapping, VRM LookAt, SpringBone chains, and rest-pose diagnostics.
 - Can have the generated Blender script export **GLB** and, when the VRM Add-on for Blender is installed, **VRM 1.0**.
 - Never downloads arbitrary `meshId` / `textureId` URLs from the manifest.
@@ -69,7 +69,7 @@ OBJ stores geometry and material references, not an armature, skin weights, or e
 |---|---|---|
 | Inspection / reconstruction plan | ✅ | Includes smooth-weight and VTuber feature diagnostics |
 | Blender scene builder | ✅ prototype | Armature + reconstructed smooth body weights + expression scaffold |
-| PMX 2.0 | ✅ experimental | Smooth weights, Japanese aliases, center/IK, gaze controls, display frames, accessory physics |
+| PMX 2.0 | ✅ experimental | UTF-16LE text, smooth weights, Japanese aliases, center/IK, gaze controls, display frames, accessory physics |
 | GLB/glTF | ✅ via Blender | Optional automatic GLB export |
 | VRM 1.0 | ✅ experimental via Blender | Humanoid map, LookAt, preset expression bindings, SpringBone and optional `.vrm` export |
 | VMD / Roblox animation conversion | Planned | Requires animation source data |
@@ -79,7 +79,11 @@ OBJ stores geometry and material references, not an armature, skin weights, or e
 
 ## Diane validation
 
-The uploaded Diane export is used as the real-world regression model without publishing Diane's source assets to this public repository. The v0.3 conversion preserves **36,773 triangles and 16 materials**, creates **29 PMX bones** including leg IK and eye controls, detects **6 dynamic accessory pieces**, generates **9 rigid bodies and 6 spring joints**, and adds **4 gaze morph controllers**. A structural PMX parser consumes the generated file to its exact end-of-file boundary after generation.
+The uploaded Diane export is used as the real-world regression model without publishing Diane's source assets to this public repository. The v0.3.1 conversion preserves **36,773 triangles and 16 materials**, creates **29 PMX bones** including leg IK and eye controls, detects **6 dynamic accessory pieces**, generates **9 rigid bodies and 6 spring joints**, and adds **4 gaze morph controllers**. A structural PMX parser consumes the generated file to its exact end-of-file boundary after generation.
+
+## MMD text encoding
+
+PMX files are written with the PMX global text encoding flag set to `0` and all text encoded as **UTF-16LE**. This improves compatibility with MMD/PMX Editor setups that expect UTF-16 for Japanese bone, morph, display-frame, rigid-body and joint names.
 
 ## Security model
 
