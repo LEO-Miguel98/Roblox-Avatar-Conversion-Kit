@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from math import inf
 
+from .face_island_stability import _is_fragmented_surface
+
 
 def _dot(a, b):
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -137,17 +139,17 @@ def _surface_bindings(mesh, group, feature_vertices, center, size):
 
 
 def install(pmx):
-    """Bind visible dynamic-head overlay art to the actual deforming face surface.
+    """Bind detailed dynamic-head overlay art to the actual deforming face surface.
 
     The Roblox animated-head OBJ stores facial artwork as disconnected overlay geometry. Even when
     eye/lip morphs are mathematically similar to the reconstructed skin cage, independently authored
     offsets let the overlay drift away from the flesh-colored socket/lip surface during VMD playback.
 
-    This finalizer treats the restored opaque skin as the deformation authority. Each visible/front
-    eye or lip overlay vertex is projected to the closest front skin triangle once, and every standard
-    facial morph then uses the barycentric blend of that triangle's actual morph delta. The overlay
-    therefore follows the local skin field instead of a separately guessed eye line or mouth curve.
-    Deeper eye pieces and hidden mouth-cavity geometry remain excluded by the previous stabilizers.
+    This finalizer treats the restored opaque skin as the deformation authority for detailed dynamic
+    heads. Each visible/front overlay vertex is projected to the closest front skin triangle once,
+    then standard facial morphs use that triangle's barycentric skin deformation. Simple/coherent
+    faces keep the existing aperture behavior; highly fragmented eye art and detailed lip overlays
+    get the surface binding that Diane requires.
     """
 
     base_reconstructed_face_morphs = pmx._reconstructed_face_morphs
@@ -174,16 +176,21 @@ def install(pmx):
         group = regions.group
         by_name = {morph.name_en: morph for morph in morphs}
 
+        fragmented_left = _is_fragmented_surface(mesh, group, regions.left_eye_surface)
+        fragmented_right = _is_fragmented_surface(mesh, group, regions.right_eye_surface)
         left_eye_surface = (
             regions.left_eye_surface
-            if len(regions.left_eye_surface) >= 12 else frozenset()
+            if fragmented_left and len(regions.left_eye_surface) >= 12 else frozenset()
         )
         right_eye_surface = (
             regions.right_eye_surface
-            if len(regions.right_eye_surface) >= 12 else frozenset()
+            if fragmented_right and len(regions.right_eye_surface) >= 12 else frozenset()
         )
+
         mouth_surface = getattr(regions, "mouth_surface", frozenset())
-        if len(mouth_surface) < 12:
+        # Small/simple heads already satisfy the exact aperture-lock contract. Surface-bind only a
+        # genuinely detailed lip overlay, where independent per-island motion is visually unstable.
+        if len(mouth_surface) < 24:
             mouth_surface = frozenset()
 
         left_bindings = _surface_bindings(
