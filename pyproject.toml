@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roblox-avatar-conversion-kit"
+version = "0.1.0"
+description = "Local-first Roblox avatar export converter for Blender, MMD/PMX, GLB and VRM workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Roblox Avatar Conversion Kit contributors"}]
+dependencies = []
+
+[project.scripts]
+rack = "roblox_avatar_conversion_kit.cli:main"
+roblox-avatar-convert = "roblox_avatar_conversion_kit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
