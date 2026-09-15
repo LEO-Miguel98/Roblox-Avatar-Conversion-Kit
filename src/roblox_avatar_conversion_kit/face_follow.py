@@ -2,13 +2,11 @@ from __future__ import annotations
 
 
 def install(pmx):
-    """Couple reconstructed facial features to the nearby opaque head shell.
+    """Couple reconstructed facial features to a local front-face skin cage.
 
-    Roblox dynamic-head OBJ exports split eyes/lips/brows from the opaque head shell. Moving those
-    disconnected feature islands without transferring their *actual* motion into the nearby skin
-    makes them look like stickers sliding over a rigid face. This wrapper samples each feature
-    morph's real displacement field and transfers a clamped, lower-strength version to nearby
-    front-facing skin vertices.
+    v0.3.18 uses the visible/front feature layer as the motion driver where possible. This prevents
+    deeper eyeball/cavity geometry from steering the skin shell and expands the deformation through
+    one or two connected skin rings so the eyelid, cheek and jaw transition reads as one face.
     """
 
     base_reconstructed_face_morphs = pmx._reconstructed_face_morphs
@@ -43,7 +41,6 @@ def install(pmx):
             if face.group == group and (face.material or "").endswith("__RACK_SKIN")
             for corner in face.corners
         }
-        # Keep the skull/back-of-head rigid. Only the visible facial shell participates.
         front_skin = frozenset(
             index
             for index in skin
@@ -52,8 +49,21 @@ def install(pmx):
         if not front_skin:
             return morphs
 
+        # Topology propagation is restricted to already-recognized front-face skin. It therefore
+        # cannot leak through glasses/hair or around the rear skull even when they are spatially
+        # close to an eye or mouth feature.
+        skin_adjacency = {index: set() for index in front_skin}
+        for face in mesh.faces:
+            if face.group != group or not (face.material or "").endswith("__RACK_SKIN"):
+                continue
+            ids = [corner[0] for corner in face.corners if corner[0] in front_skin]
+            for i, vertex in enumerate(ids):
+                for neighbor in ids[i + 1:]:
+                    skin_adjacency[vertex].add(neighbor)
+                    skin_adjacency[neighbor].add(vertex)
+
         def source_motion(name, source):
-            """Recover source-space feature deltas from the already-authored PMX morph."""
+            """Recover source-space feature deltas from the authored PMX morph."""
             morph = by_name.get(name)
             if morph is None or not source:
                 return {}
@@ -68,7 +78,6 @@ def install(pmx):
                 if not values:
                     continue
                 count = float(len(values))
-                # _mmd_vec3 is its own inverse: it only flips Z.
                 average = tuple(sum(value[axis] for value in values) / count for axis in range(3))
                 motion[source_index] = (average[0], average[1], -average[2])
             return motion
@@ -76,7 +85,10 @@ def install(pmx):
         def _clamp(value, limit):
             return max(-limit, min(limit, value))
 
-        def append_motion_coupled_skin(
+        def _magnitude(delta):
+            return sum(value * value for value in delta)
+
+        def motion_coupled_skin(
             name,
             source,
             *,
@@ -87,17 +99,12 @@ def install(pmx):
             max_y,
             max_z=0.0,
             z_gain=0.0,
+            propagate=True,
         ):
-            """Transfer local feature motion to nearby shell vertices.
-
-            The nearest few feature vertices define the local displacement direction. Inverse-
-            distance blending avoids hard seams between disconnected eye/lip components while a
-            distance falloff and explicit component clamps keep the head silhouette stable.
-            """
             morph = by_name.get(name)
             motion = source_motion(name, source)
             if morph is None or not motion:
-                return
+                return {}
 
             rx = max(float(radius_x), 1e-6)
             ry = max(float(radius_y), 1e-6)
@@ -107,12 +114,13 @@ def install(pmx):
                 if abs(delta[0]) + abs(delta[1]) + abs(delta[2]) > 1e-9
             ]
             if not movers:
-                return
+                return {}
 
             min_x = min(point[0] for point, _delta in movers) - rx
             max_x_bound = max(point[0] for point, _delta in movers) + rx
             min_y = min(point[1] for point, _delta in movers) - ry
             max_y_bound = max(point[1] for point, _delta in movers) + ry
+            direct = {}
 
             for skin_index in front_skin:
                 point = mesh.vertices[skin_index]
@@ -135,8 +143,6 @@ def install(pmx):
                 total = 0.0
                 blended = [0.0, 0.0, 0.0]
                 for distance2, delta in nearest:
-                    # Strongly favor the closest feature samples so upper/lower lids and opposite
-                    # mouth edges do not cancel each other across the facial opening.
                     weight = ((1.0 - distance2) ** 2) / (0.025 + distance2)
                     total += weight
                     for axis in range(3):
@@ -145,75 +151,146 @@ def install(pmx):
                     continue
                 blended = [value / total for value in blended]
 
-                nearest_distance2 = nearest[0][0]
-                falloff = (1.0 - nearest_distance2) ** 1.5
+                # Slightly broader than v0.3.17, but still local. The strongest inner socket/lip
+                # vertices can follow most of the visible feature motion while the outer face fades.
+                falloff = (1.0 - nearest[0][0]) ** 1.25
                 delta = (
                     _clamp(blended[0] * gain * falloff, max_x),
                     _clamp(blended[1] * gain * falloff, max_y),
                     _clamp(blended[2] * z_gain * falloff, max_z) if max_z > 0.0 else 0.0,
                 )
-                if max(abs(value) for value in delta) < 1e-6:
-                    continue
-                for pmx_index in source_to_pmx.get((group, skin_index), ()):
-                    morph.offsets.append((pmx_index, pmx._mmd_vec3(delta)))
+                if max(abs(value) for value in delta) >= 1e-6:
+                    direct[skin_index] = delta
 
-        # Eyes need the strongest coupling because an 88%-closing eye island against a nearly rigid
-        # socket is the most obvious source of the floating/sticker look.
+            if not propagate or not direct:
+                return direct
+
+            # Carry a smaller amount of motion through connected facial skin. This fills the sparse
+            # gaps between restored shell fragments and gives cheeks/jaw/eyelids a continuous cage
+            # response without dragging the head silhouette.
+            output = dict(direct)
+            frontier = dict(direct)
+            for decay in (0.42, 0.22):
+                expanded = {}
+                for skin_index in front_skin:
+                    if skin_index in output:
+                        continue
+                    neighbor_deltas = [
+                        frontier[neighbor]
+                        for neighbor in skin_adjacency.get(skin_index, ())
+                        if neighbor in frontier
+                    ]
+                    if not neighbor_deltas:
+                        continue
+                    count = float(len(neighbor_deltas))
+                    average = tuple(
+                        sum(delta[axis] for delta in neighbor_deltas) / count
+                        for axis in range(3)
+                    )
+                    delta = tuple(value * decay for value in average)
+                    if max(abs(value) for value in delta) >= 1e-6:
+                        expanded[skin_index] = delta
+                output.update(expanded)
+                frontier = expanded
+                if not expanded:
+                    break
+
+            # A small topology average removes single-vertex spikes while preserving the direct
+            # feature-follow direction at the inner eyelid/lip border.
+            for skin_index, delta in direct.items():
+                neighbors = [
+                    output[neighbor]
+                    for neighbor in skin_adjacency.get(skin_index, ())
+                    if neighbor in output
+                ]
+                if not neighbors:
+                    continue
+                count = float(len(neighbors))
+                average = tuple(
+                    sum(value[axis] for value in neighbors) / count
+                    for axis in range(3)
+                )
+                output[skin_index] = tuple(
+                    0.88 * delta[axis] + 0.12 * average[axis]
+                    for axis in range(3)
+                )
+            return output
+
+        pending = {name: {} for name in by_name}
+
+        def merge_skin(name, values):
+            if name not in pending:
+                return
+            target = pending[name]
+            for source_index, delta in values.items():
+                current = target.get(source_index)
+                # Left/right support can meet at the nose. Choose the stronger local field instead
+                # of emitting duplicate PMX offsets, whose behavior varies between consumers.
+                if current is None or _magnitude(delta) > _magnitude(current):
+                    target[source_index] = delta
+
+        left_eye_driver = (
+            regions.left_eye_surface
+            if len(regions.left_eye_surface) >= 12 else regions.left_eye
+        )
+        right_eye_driver = (
+            regions.right_eye_surface
+            if len(regions.right_eye_surface) >= 12 else regions.right_eye
+        )
+
         for name, source in (
-            ("BlinkLeft", regions.left_eye),
-            ("BlinkRight", regions.right_eye),
+            ("BlinkLeft", left_eye_driver),
+            ("BlinkRight", right_eye_driver),
         ):
-            append_motion_coupled_skin(
+            merge_skin(name, motion_coupled_skin(
                 name,
                 source,
-                radius_x=0.14 * width,
-                radius_y=0.11 * height,
-                gain=0.72,
-                max_x=0.018 * width,
-                max_y=0.055 * height,
-            )
+                radius_x=0.15 * width,
+                radius_y=0.125 * height,
+                gain=0.82,
+                max_x=0.020 * width,
+                max_y=0.060 * height,
+            ))
 
-        if "Blink" in by_name:
-            for source in (regions.left_eye, regions.right_eye):
-                append_motion_coupled_skin(
-                    "Blink",
-                    source,
-                    radius_x=0.14 * width,
-                    radius_y=0.11 * height,
-                    gain=0.72,
-                    max_x=0.018 * width,
-                    max_y=0.055 * height,
-                )
+        for source in (left_eye_driver, right_eye_driver):
+            merge_skin("Blink", motion_coupled_skin(
+                "Blink",
+                source,
+                radius_x=0.15 * width,
+                radius_y=0.125 * height,
+                gain=0.82,
+                max_x=0.020 * width,
+                max_y=0.060 * height,
+            ))
 
-        for name, gain in (("EyeWide", 0.60), ("HalfLid", 0.68), ("HappyEyes", 0.68)):
-            for source in (regions.left_eye, regions.right_eye):
-                append_motion_coupled_skin(
+        for name, gain in (("EyeWide", 0.68), ("HalfLid", 0.75), ("HappyEyes", 0.75)):
+            for source in (left_eye_driver, right_eye_driver):
+                merge_skin(name, motion_coupled_skin(
                     name,
                     source,
-                    radius_x=0.14 * width,
-                    radius_y=0.115 * height,
+                    radius_x=0.15 * width,
+                    radius_y=0.13 * height,
                     gain=gain,
-                    max_x=0.018 * width,
-                    max_y=0.050 * height,
-                )
+                    max_x=0.020 * width,
+                    max_y=0.055 * height,
+                ))
 
         for name in ("BrowRaise", "BrowLower", "BrowSad", "BrowAngry", "BrowSerious"):
             for source in (regions.left_brow, regions.right_brow):
-                append_motion_coupled_skin(
+                merge_skin(name, motion_coupled_skin(
                     name,
                     source,
-                    radius_x=0.13 * width,
-                    radius_y=0.095 * height,
-                    gain=0.55,
-                    max_x=0.015 * width,
-                    max_y=0.030 * height,
-                )
+                    radius_x=0.14 * width,
+                    radius_y=0.10 * height,
+                    gain=0.62,
+                    max_x=0.016 * width,
+                    max_y=0.032 * height,
+                ))
 
-        # The neutral-mouth reveal can contain a large Z displacement because the mouth cavity is
-        # hidden inside the head. Never transfer that reveal into the skin shell; only X/Y lip/jaw
-        # motion is coupled. This makes speech deform the face without making the cheek shell pop.
-        mouth = regions.mouth
-        if len(mouth) >= 12:
+        mouth_all = getattr(regions, "mouth_all", regions.mouth)
+        mouth_surface = getattr(regions, "mouth_surface", frozenset())
+        mouth_driver = mouth_surface if len(mouth_surface) >= 12 else mouth_all
+        if len(mouth_driver) >= 12:
             for name in (
                 "MouthOpen",
                 "MouthI",
@@ -224,16 +301,25 @@ def install(pmx):
                 "MouthWide",
                 "Smile",
             ):
-                append_motion_coupled_skin(
+                merge_skin(name, motion_coupled_skin(
                     name,
-                    mouth,
-                    radius_x=0.18 * width,
-                    radius_y=0.145 * height,
-                    gain=0.66,
-                    max_x=0.030 * width,
-                    max_y=0.048 * height,
+                    mouth_driver,
+                    radius_x=0.20 * width,
+                    radius_y=0.17 * height,
+                    gain=0.76,
+                    max_x=0.035 * width,
+                    max_y=0.055 * height,
                     z_gain=0.0,
-                )
+                ))
+
+        for name, source_offsets in pending.items():
+            morph = by_name.get(name)
+            if morph is None or not source_offsets:
+                continue
+            for source_index in sorted(source_offsets):
+                delta = source_offsets[source_index]
+                for pmx_index in source_to_pmx.get((group, source_index), ()):
+                    morph.offsets.append((pmx_index, pmx._mmd_vec3(delta)))
 
         return morphs
 

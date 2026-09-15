@@ -2,7 +2,7 @@
 
 A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL + textures`, optionally with `avatar_manifest.json`) into files that are easier to use in **MMD**, **Blender**, **GLB**, and **VTubing / VRM** workflows.
 
-> **Current status: v0.3.16 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD-compatible motion bones/IK, coordinated face-shell facial morphs, clean OBJ-only geometry inference, garment-aware long-sleeve weighting, and restrained secondary physics. Roblox OBJ exports still do **not** contain original skin weights or source blend-shape/FACS deltas, so reconstructed deformation and expressions should be visually reviewed before production use.
+> **Current status: v0.3.18 prototype.** The kit reconstructs a humanoid rig, conservative smooth body weights, MMD-compatible motion bones/IK, coordinated face-shell facial morphs, clean OBJ-only geometry inference, garment-aware long-sleeve weighting, and restrained secondary physics. Roblox OBJ exports still do **not** contain original skin weights or source blend-shape/FACS deltas, so reconstructed deformation and expressions should be visually reviewed before production use.
 
 ## What it does
 
@@ -15,8 +15,8 @@ A local-first toolkit for turning a **Roblox avatar export package** (`OBJ + MTL
 - Uses a garment-aware upper-body solver for long sleeves so torso cloth follows the torso, sleeves remain side-locked, elbow bending is localized near the elbow, and hand influence is delayed until the cuff and capped at 15%.
 - Creates experimental **PMX 2.0** in UTF-16LE with MMD-standard body names, root/center/groove controls, leg + toe IK, shoulder/twist helpers, gaze controls, reconstructed facial morphs, display frames and collision-safe spring templates.
 - Reconstructs PMX vertex morphs for blink/winks, eye/brow controls, `あ / い / う / え / お`, mouth controls and smile when the exported head contains separable front-face geometry.
-- Adds low-amplitude companion deformation to nearby opaque face-shell vertices so eyes, brows and mouth do not animate like detached stickers while keeping hair, glasses and the back of the head out of the facial falloff.
-- In geometry-only animated-head exports, hides detected internal mouth/cavity geometry in the neutral pose and reveals it through mouth morphs instead of leaving it visible across the face.
+- Couples facial-shell motion to the visible/front eye and lip layers, then propagates a smaller response through connected front-face skin so eyelids, cheeks and jaw deform as a local cage instead of detached stickers.
+- In geometry-only animated-head exports, keeps thin visible mouth/lip surface pieces on the face at neutral while hiding only separable deeper mouth/cavity geometry; closed-mouth and smile controls do not pull the hidden cavity through the face.
 - Generates a Blender build script with smooth skinning, editable facial expression keys, VRM 1.0 humanoid mapping, VRM LookAt, SpringBone chains and rest-pose diagnostics.
 - Can hand a generated PMX to a **user-supplied PMXEditor on Windows** for acceptance/count validation, optional re-save and screenshot capture.
 - Never downloads arbitrary `meshId` / `textureId` URLs from the manifest.
@@ -65,9 +65,9 @@ v0.3.15+ currently reconstructs approximately 23 face/gaze controls, including:
 
 These are actual vertex/bone morphs, not zero-delta placeholders, but their shapes are reconstructed from exported geometry. Texture-only heads or heads without safely separable facial geometry do not receive fabricated vertex morphs.
 
-v0.3.15 adds coordinated nearby-skin deformation around the reconstructed eye, brow and mouth features. Only a small front-facing opaque face-shell region participates with falloff; glasses, hair and back-of-head shell vertices stay independent. This reduces the floating-eye/floating-mouth look while keeping the head silhouette stable.
+v0.3.17 changed the shell follow pass to sample the actual reconstructed eye/brow/mouth displacement instead of applying an unrelated weak heuristic. v0.3.18 goes further: the surrounding face cage is driven by thin/front visible feature layers where they can be identified, then motion is propagated only across connected front-face skin. This reduces influence from deeper eyeball/cavity pieces and gives the eyelid/socket, lip/cheek and jaw boundaries a more continuous deformation field while keeping hair, glasses and the rear skull independent.
 
-Some Roblox animated heads export internal mouth/tongue/cavity pieces that Roblox composites differently from MMD. On geometry-only conversions, the converter detects the same mouth components used for reconstructed morphs, tucks them deeper inside the head for the neutral pose, and adds the inverse depth movement to the vowel/smile morphs. This keeps the neutral face clean while preserving animatable mouth geometry.
+Some Roblox animated heads export visible lip pieces together with internal mouth/tongue/cavity pieces that Roblox composites differently from MMD. v0.3.18 separates those roles when the geometry allows it: thin front mouth pieces remain on the face continuously, deeper cavity pieces are tucked inside at neutral, and only open-vowel/wide controls reveal the cavity. `MouthClosed` and `Smile` keep the cavity hidden rather than making it pop through the face.
 
 ## MMD motion compatibility
 
@@ -129,7 +129,7 @@ OBJ stores geometry and material references, not an armature, skin weights or so
 | Geometry-only OBJ/MTL inference | ✅ experimental | Removes scene helpers and infers a Diane-style humanoid from `Rig*` geometry |
 | Blender scene builder | ✅ prototype | Manifest-backed armature + smooth weights + expression scaffold |
 | PMX 2.0 | ✅ experimental | UTF-16LE, silhouette-safe weights, MMD motion hierarchy/IK, facial/gaze controls and conservative secondary physics |
-| Reconstructed PMX face morphs | ✅ experimental | Coordinated eyes/brows/mouth + nearby face-shell falloff when separable face geometry is detected |
+| Reconstructed PMX face morphs | ✅ experimental | Surface-driven eyes/brows/mouth, selective internal-mouth reveal and local connected face-cage follow |
 | Garment-aware long sleeves | ✅ experimental | Torso/sleeve separation, localized elbow blend and capped cuff/hand influence |
 | PMXEditor validation | ✅ Windows integration | Acceptance report, optional re-save/screenshot, count comparison |
 | GLB/glTF | ✅ via Blender | Optional Blender export |
@@ -142,7 +142,7 @@ OBJ stores geometry and material references, not an armature, skin weights or so
 
 The uploaded Diane exports are used as private real-world regression inputs; their source assets are not published in this public repository.
 
-The current clean-Diane v0.3.16 regression target remains **45,423 PMX vertices, 32,013 triangles, 14 materials, 43 bones, 4 IK controllers, 23 face/gaze morphs, 8 rigid bodies and 6 physics joints**. The model retains the MMD root/groove helpers, shoulder/twist helpers, toe bones and toe IK, coordinated face-shell morph support, four-segment shark tail and two-segment restrained heart/cowlick chain.
+The current clean-Diane v0.3.18 regression target remains **45,423 PMX vertices, 32,013 triangles, 14 materials, 43 bones, 4 IK controllers, 23 face/gaze morphs, 8 rigid bodies and 6 physics joints**. The model retains the MMD root/groove helpers, shoulder/twist helpers, toe bones and toe IK, coordinated face-cage morph support, four-segment shark tail and two-segment restrained heart/cowlick chain.
 
 For the clean Diane jacket (`Handle2`, approximately 1,723 vertices), regression checks require **0 vertices with more than 50% hand influence**, a maximum hand influence of **15%**, and **0 cross-arm assignments**. v0.3.16 additionally tests that mid-upper-sleeve vertices remain upper-arm dominant, the elbow region blends upper/lower arm, and hand influence is delayed until the cuff.
 
