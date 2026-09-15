@@ -88,7 +88,7 @@
 - Heart/cowlick detection uses the highest small accessory and generates a two-segment, high-damping, very-low-angle wiggle chain
 - Clean Diane regression intentionally excludes the old fairy and speech-bubble accessories
 
-## v0.3.9 — reconstructed facial animation ✅ implementation
+## v0.3.9 — reconstructed facial animation ✅
 - Detects the densest humanoid `Rig*` mesh mapped to the head instead of deforming head accessories such as hair
 - Splits disconnected front-face geometry into eye and mouth regions using head-relative bounds
 - Generates real PMX vertex morphs for `Blink`, `BlinkLeft`, `BlinkRight`, `MouthOpen`, and `Smile`
@@ -97,14 +97,30 @@
 - Clean Diane regression generates 1,550 blink vertex offsets, 772/778 left/right wink offsets, and 838 offsets each for mouth-open and smile
 - UTF-16LE, v0.3.8 clean-OBJ inference, tail physics and restrained heart/cowlick physics remain unchanged
 
+## v0.3.10 — geometry-only material fidelity ✅
+- Geometry-only textured materials use neutral white PMX diffuse/ambient values so the PNG color map is not multiplied by Roblox's exported gray `Kd` tint
+- Manifest-driven conversions retain their original MTL tint behavior
+- Untextured materials retain their MTL colors
+- Fixes the clean Diane regression where white hair rendered charcoal in PMXEditor
+
+## v0.3.11 — neutral face + MMD motion compatibility ✅ implementation
+- Geometry-only animated-head mouth cavity/lip pieces are tucked inside the head at neutral instead of rendering as a large pink block across the face
+- Mouth morphs reveal the tucked geometry only when animated
+- Adds reconstructed standard vowel morphs `あ / い / う / え / お` plus `笑い`, while retaining blink/wink and gaze controls
+- Rebuilds the PMX hierarchy around conventions measured from the supplied classic PMD reference models: upper and lower body are siblings below Center/Groove rather than chaining upper body under lower body
+- Adds semistandard motion helpers used by the supplied VMD: `全ての親`, `グルーブ`, shoulder/shoulder-P bones, arm/wrist twist bones, toe bones, and toe IK
+- Leg IK uses the classic knee+leg chain; toe IK targets the toe through the ankle with short high-weight solving
+- Center height is reconstructed near the classic PMD center/lower-body proportion instead of sitting directly on the hips
+- Clean Diane regression: 45,423 vertices, 32,013 triangles, 13 materials, 43 bones, 4 IK bones, 13 total expression/gaze morphs, 8 rigid bodies and 6 joints
+- Structural PMX parser reaches exact EOF after the hierarchy/morph changes
+
 ### v0.3.x refinement
 - Automatic T/A-pose normalization for VRM workflows
 - Native expression/morph ingestion when the source format actually contains morph deltas
 - Better eye-geometry detection / assignment for avatars that have separate eye meshes
-- Additional reconstructed mouth vowels / expression tuning
-- Material tuning for MMD / MToon-style workflows
+- More face-expression tuning beyond the standard vowel/blink/smile set
 - Weight and physics heatmap / deformation diagnostics
-- More sophisticated multi-segment hair, skirt and tail chains
+- More sophisticated multi-segment hair and skirt chains
 - Visual regression scoring using PMXEditor screenshots against known-good avatar references
 
 ## v0.4 — animation conversion
