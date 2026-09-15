@@ -50,7 +50,28 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(len(features.dynamics), 1)
         self.assertEqual(features.dynamics[0].group, "HandleHair")
         self.assertEqual(features.dynamics[0].parent_bone, "head")
+        self.assertEqual(features.dynamics[0].physics_mode, "rigid")
+        self.assertEqual(features.dynamics[0].segments, 0)
         self.assertIn("blink", features.expression_presets)
+
+    def test_detects_wraplayer_as_layered_clothing(self):
+        mesh = ObjMesh(
+            vertices=[(-1, 0, 0), (1, 0, 0), (0, 1, 0)],
+            faces=[Face([(0, None, None), (1, None, None), (2, None, None)], "Handle1", None)],
+        )
+        manifest = {
+            "meshParts": [{"name": "Head", "cframe": [0, 2, 0], "size": [1, 1, 1]}],
+            "accessories": [{
+                "name": "Layered Jacket",
+                "accessoryType": "Enum.AccessoryType.Jacket",
+                "handle": {"fullName": "Avatar.Jacket.Handle", "cframe": [0, 0.3, 0], "size": [2, 1, 1]},
+                "wrap": [{"className": "WrapLayer"}],
+            }],
+            "joints": [],
+        }
+        features = analyze_features(manifest, mesh, (0, 0, 0), [Bone("head", None, (0, 2, 0)), Bone("spine", None, (0, 0.5, 0))])
+        self.assertEqual(len(features.layered_clothing), 1)
+        self.assertEqual(features.layered_clothing[0].group, "Handle1")
 
 
 if __name__ == "__main__":
