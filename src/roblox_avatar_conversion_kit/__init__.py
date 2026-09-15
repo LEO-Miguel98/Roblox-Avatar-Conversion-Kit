@@ -15,6 +15,7 @@ from .face_surface_bind import install as _install_face_surface_bind
 from .face_visible_layers import install as _install_face_visible_layers
 from .face_vmd_compat import install as _install_face_vmd_compat
 from .face_topology_weld import install as _install_face_topology_weld
+from .face_final_eye_closure import install as _install_face_final_eye_closure
 from .face_final_surface_lock import install as _install_face_final_surface_lock
 
 _install_face_runtime(_pmx)
@@ -27,7 +28,9 @@ _install_face_surface_bind(_pmx)
 _install_face_visible_layers(_pmx)
 _install_face_vmd_compat(_pmx)
 _install_face_topology_weld(_pmx)
-# Absolute finalizer: no later alias can change lip/eyelid motion relative to the face skin.
+# Blink uses target-lock so eyelid art finishes on the flesh-colored socket curve.
+_install_face_final_eye_closure(_pmx)
+# Mouth uses exact delta-lock so additive VMD blends preserve lip-to-skin spacing.
 _install_face_final_surface_lock(_pmx)
 del _install_face_runtime
 del _install_face_follow
@@ -39,4 +42,5 @@ del _install_face_surface_bind
 del _install_face_visible_layers
 del _install_face_vmd_compat
 del _install_face_topology_weld
+del _install_face_final_eye_closure
 del _install_face_final_surface_lock
