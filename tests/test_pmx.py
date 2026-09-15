@@ -4,11 +4,19 @@ from pathlib import Path
 
 from roblox_avatar_conversion_kit.features import DynamicAccessory, EyeRig, FeaturePlan
 from roblox_avatar_conversion_kit.obj import Face, ObjMesh
-from roblox_avatar_conversion_kit.pmx import write_pmx
+from roblox_avatar_conversion_kit.pmx import _mmd_uv, _mmd_vec3, write_pmx
 from roblox_avatar_conversion_kit.rig import Bone
 
 
 class PmxTests(unittest.TestCase):
+
+    def test_roblox_to_mmd_coordinate_and_uv_conversion(self):
+        # Roblox avatar exports face -Z with character-left on -X.
+        # MMD/PMX uses the opposite model-facing basis, so rotate 180 degrees around Y.
+        self.assertEqual(_mmd_vec3((2.0, 3.0, -4.0)), (-2.0, 3.0, 4.0))
+        # PMX and OBJ use opposite V texture origins; U must stay unchanged.
+        self.assertEqual(_mmd_uv((0.25, 0.75)), (0.25, 0.25))
+
     def test_writes_pmx_with_gaze_ik_and_accessory_physics(self):
         mesh = ObjMesh(
             vertices=[
