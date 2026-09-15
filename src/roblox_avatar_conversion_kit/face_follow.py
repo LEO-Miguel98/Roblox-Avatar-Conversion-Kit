@@ -2,12 +2,13 @@ from __future__ import annotations
 
 
 def install(pmx):
-    """Add low-amplitude face-shell deformation around reconstructed facial feature morphs.
+    """Couple reconstructed facial features to the nearby opaque head shell.
 
-    Roblox dynamic-head OBJ exports split eyes/lips/brows from the opaque head shell. The v0.3.13
-    reconstruction correctly animates those feature pieces, but a rigid shell can make them look
-    like stickers sliding over the face. This wrapper keeps the existing feature morphs and adds
-    smooth companion offsets to nearby *front-facing* skin vertices.
+    Roblox dynamic-head OBJ exports split eyes/lips/brows from the opaque head shell. Moving those
+    disconnected feature islands without transferring their *actual* motion into the nearby skin
+    makes them look like stickers sliding over a rigid face. This wrapper samples each feature
+    morph's real displacement field and transfers a clamped, lower-strength version to nearby
+    front-facing skin vertices.
     """
 
     base_reconstructed_face_morphs = pmx._reconstructed_face_morphs
@@ -42,8 +43,7 @@ def install(pmx):
             if face.group == group and (face.material or "").endswith("__RACK_SKIN")
             for corner in face.corners
         }
-        # Only deform the visible front half. Back-of-head shell vertices must stay rigid during
-        # facial animation or the whole skull can visibly breathe with speech/blinks.
+        # Keep the skull/back-of-head rigid. Only the visible facial shell participates.
         front_skin = frozenset(
             index
             for index in skin
@@ -52,245 +52,188 @@ def install(pmx):
         if not front_skin:
             return morphs
 
-        def feature_center(source):
-            points = [mesh.vertices[index] for index in source]
-            if not points:
-                return center
-            return tuple(
-                sum(point[axis] for point in points) / len(points)
-                for axis in range(3)
-            )
-
-        def skin_support(source, radius_x, radius_y, *, y_bias=0.0):
-            if not source:
-                return {}
-            anchor = feature_center(source)
-            ax = anchor[0]
-            ay = anchor[1] + y_bias
-            rx = max(radius_x, 1e-6)
-            ry = max(radius_y, 1e-6)
-            support = {}
-            for index in front_skin:
-                point = mesh.vertices[index]
-                nx = (point[0] - ax) / rx
-                ny = (point[1] - ay) / ry
-                r2 = nx * nx + ny * ny
-                if r2 >= 1.0:
-                    continue
-                # Quadratic falloff avoids a visible border where the companion deformation ends.
-                support[index] = (1.0 - r2) ** 2
-            return support
-
-        def append_skin(name, support, delta_fn):
+        def source_motion(name, source):
+            """Recover source-space feature deltas from the already-authored PMX morph."""
             morph = by_name.get(name)
-            if morph is None:
+            if morph is None or not source:
+                return {}
+            by_pmx = {vertex_index: delta for vertex_index, delta in morph.offsets}
+            motion = {}
+            for source_index in source:
+                values = [
+                    by_pmx[pmx_index]
+                    for pmx_index in source_to_pmx.get((group, source_index), ())
+                    if pmx_index in by_pmx
+                ]
+                if not values:
+                    continue
+                count = float(len(values))
+                # _mmd_vec3 is its own inverse: it only flips Z.
+                average = tuple(sum(value[axis] for value in values) / count for axis in range(3))
+                motion[source_index] = (average[0], average[1], -average[2])
+            return motion
+
+        def _clamp(value, limit):
+            return max(-limit, min(limit, value))
+
+        def append_motion_coupled_skin(
+            name,
+            source,
+            *,
+            radius_x,
+            radius_y,
+            gain,
+            max_x,
+            max_y,
+            max_z=0.0,
+            z_gain=0.0,
+        ):
+            """Transfer local feature motion to nearby shell vertices.
+
+            The nearest few feature vertices define the local displacement direction. Inverse-
+            distance blending avoids hard seams between disconnected eye/lip components while a
+            distance falloff and explicit component clamps keep the head silhouette stable.
+            """
+            morph = by_name.get(name)
+            motion = source_motion(name, source)
+            if morph is None or not motion:
                 return
-            for vertex_index, influence in support.items():
-                point = mesh.vertices[vertex_index]
-                delta = delta_fn(point, influence)
+
+            rx = max(float(radius_x), 1e-6)
+            ry = max(float(radius_y), 1e-6)
+            movers = [
+                (mesh.vertices[index], delta)
+                for index, delta in motion.items()
+                if abs(delta[0]) + abs(delta[1]) + abs(delta[2]) > 1e-9
+            ]
+            if not movers:
+                return
+
+            min_x = min(point[0] for point, _delta in movers) - rx
+            max_x_bound = max(point[0] for point, _delta in movers) + rx
+            min_y = min(point[1] for point, _delta in movers) - ry
+            max_y_bound = max(point[1] for point, _delta in movers) + ry
+
+            for skin_index in front_skin:
+                point = mesh.vertices[skin_index]
+                if not (min_x <= point[0] <= max_x_bound and min_y <= point[1] <= max_y_bound):
+                    continue
+
+                nearest = []
+                for feature_point, delta in movers:
+                    nx = (point[0] - feature_point[0]) / rx
+                    ny = (point[1] - feature_point[1]) / ry
+                    distance2 = nx * nx + ny * ny
+                    if distance2 >= 1.0:
+                        continue
+                    nearest.append((distance2, delta))
+                if not nearest:
+                    continue
+                nearest.sort(key=lambda item: item[0])
+                nearest = nearest[:6]
+
+                total = 0.0
+                blended = [0.0, 0.0, 0.0]
+                for distance2, delta in nearest:
+                    # Strongly favor the closest feature samples so upper/lower lids and opposite
+                    # mouth edges do not cancel each other across the facial opening.
+                    weight = ((1.0 - distance2) ** 2) / (0.025 + distance2)
+                    total += weight
+                    for axis in range(3):
+                        blended[axis] += delta[axis] * weight
+                if total <= 1e-12:
+                    continue
+                blended = [value / total for value in blended]
+
+                nearest_distance2 = nearest[0][0]
+                falloff = (1.0 - nearest_distance2) ** 1.5
+                delta = (
+                    _clamp(blended[0] * gain * falloff, max_x),
+                    _clamp(blended[1] * gain * falloff, max_y),
+                    _clamp(blended[2] * z_gain * falloff, max_z) if max_z > 0.0 else 0.0,
+                )
                 if max(abs(value) for value in delta) < 1e-6:
                     continue
-                for pmx_index in source_to_pmx.get((group, vertex_index), ()):
+                for pmx_index in source_to_pmx.get((group, skin_index), ()):
                     morph.offsets.append((pmx_index, pmx._mmd_vec3(delta)))
 
-        def add_eye_side(source, blink_name):
-            if len(source) < 12:
-                return
-            ys = [mesh.vertices[index][1] for index in source]
-            line = sum(ys) / len(ys)
-            support = skin_support(source, 0.25 * width, 0.17 * height)
-            append_skin(
-                blink_name,
-                support,
-                lambda point, influence: (
-                    0.0,
-                    (line - point[1]) * 0.14 * influence,
-                    0.0,
-                ),
+        # Eyes need the strongest coupling because an 88%-closing eye island against a nearly rigid
+        # socket is the most obvious source of the floating/sticker look.
+        for name, source in (
+            ("BlinkLeft", regions.left_eye),
+            ("BlinkRight", regions.right_eye),
+        ):
+            append_motion_coupled_skin(
+                name,
+                source,
+                radius_x=0.14 * width,
+                radius_y=0.11 * height,
+                gain=0.72,
+                max_x=0.018 * width,
+                max_y=0.055 * height,
             )
 
-        add_eye_side(regions.left_eye, "BlinkLeft")
-        add_eye_side(regions.right_eye, "BlinkRight")
-
-        # Blink is a standalone PMX morph, so give it the same shell offsets as both winks rather
-        # than relying on MMD to compose the two side morphs.
         if "Blink" in by_name:
             for source in (regions.left_eye, regions.right_eye):
-                if len(source) < 12:
-                    continue
-                ys = [mesh.vertices[index][1] for index in source]
-                line = sum(ys) / len(ys)
-                support = skin_support(source, 0.25 * width, 0.17 * height)
-                append_skin(
+                append_motion_coupled_skin(
                     "Blink",
-                    support,
-                    lambda point, influence, _line=line: (
-                        0.0,
-                        (_line - point[1]) * 0.14 * influence,
-                        0.0,
-                    ),
+                    source,
+                    radius_x=0.14 * width,
+                    radius_y=0.11 * height,
+                    gain=0.72,
+                    max_x=0.018 * width,
+                    max_y=0.055 * height,
                 )
 
-        for source in (regions.left_eye, regions.right_eye):
-            if len(source) < 12:
-                continue
-            ys = [mesh.vertices[index][1] for index in source]
-            line = sum(ys) / len(ys)
-            support = skin_support(source, 0.25 * width, 0.18 * height)
-            append_skin(
-                "EyeWide",
-                support,
-                lambda point, influence, _line=line: (
-                    0.0,
-                    (point[1] - _line) * 0.035 * influence,
-                    0.0,
-                ),
-            )
-            append_skin(
-                "HalfLid",
-                support,
-                lambda point, influence, _line=line: (
-                    0.0,
-                    (_line - point[1]) * 0.075 * influence if point[1] > _line else 0.0,
-                    0.0,
-                ),
-            )
-            append_skin(
-                "HappyEyes",
-                support,
-                lambda point, influence, _line=line: (
-                    0.0,
-                    0.012 * height * influence * (1.0 if point[1] <= _line else 0.35),
-                    0.0,
-                ),
-            )
+        for name, gain in (("EyeWide", 0.60), ("HalfLid", 0.68), ("HappyEyes", 0.68)):
+            for source in (regions.left_eye, regions.right_eye):
+                append_motion_coupled_skin(
+                    name,
+                    source,
+                    radius_x=0.14 * width,
+                    radius_y=0.115 * height,
+                    gain=gain,
+                    max_x=0.018 * width,
+                    max_y=0.050 * height,
+                )
 
-        for source in (regions.left_brow, regions.right_brow):
-            if len(source) < 6:
-                continue
-            support = skin_support(
-                source,
-                0.24 * width,
-                0.15 * height,
-                y_bias=0.015 * height,
-            )
-            append_skin(
-                "BrowRaise", support,
-                lambda _point, influence: (0.0, 0.010 * height * influence, 0.0),
-            )
-            append_skin(
-                "BrowLower", support,
-                lambda _point, influence: (0.0, -0.008 * height * influence, 0.0),
-            )
-            append_skin(
-                "BrowSad", support,
-                lambda point, influence: (
-                    0.0,
-                    (0.014 if abs(point[0] - center[0]) < 0.22 * width else -0.004)
-                    * height * influence,
-                    0.0,
-                ),
-            )
-            append_skin(
-                "BrowAngry", support,
-                lambda point, influence: (
-                    0.0,
-                    (-0.013 if abs(point[0] - center[0]) < 0.22 * width else 0.004)
-                    * height * influence,
-                    0.0,
-                ),
-            )
-            append_skin(
-                "BrowSerious", support,
-                lambda _point, influence: (0.0, -0.006 * height * influence, 0.0),
-            )
+        for name in ("BrowRaise", "BrowLower", "BrowSad", "BrowAngry", "BrowSerious"):
+            for source in (regions.left_brow, regions.right_brow):
+                append_motion_coupled_skin(
+                    name,
+                    source,
+                    radius_x=0.13 * width,
+                    radius_y=0.095 * height,
+                    gain=0.55,
+                    max_x=0.015 * width,
+                    max_y=0.030 * height,
+                )
 
+        # The neutral-mouth reveal can contain a large Z displacement because the mouth cavity is
+        # hidden inside the head. Never transfer that reveal into the skin shell; only X/Y lip/jaw
+        # motion is coupled. This makes speech deform the face without making the cheek shell pop.
         mouth = regions.mouth
-        if len(mouth) < 12:
-            return morphs
-        mouth_support = skin_support(
-            mouth,
-            0.34 * width,
-            0.30 * height,
-            y_bias=-0.015 * height,
-        )
-        mouth_anchor = feature_center(mouth)
-
-        def mouth_skin_delta(kind, point, influence):
-            rel_x = point[0] - mouth_anchor[0]
-            sign_x = 1.0 if rel_x >= 0 else -1.0
-            xnorm = min(abs(rel_x) / max(0.34 * width, 1e-6), 1.0)
-            below = max(
-                0.0,
-                min((mouth_anchor[1] - point[1]) / max(0.26 * height, 1e-6), 1.0),
-            )
-            if kind == "a":
-                return (
-                    0.004 * width * xnorm * sign_x * influence,
-                    -0.026 * height * (0.45 + 0.55 * below) * influence,
-                    0.0,
+        if len(mouth) >= 12:
+            for name in (
+                "MouthOpen",
+                "MouthI",
+                "MouthU",
+                "MouthE",
+                "MouthO",
+                "MouthClosed",
+                "MouthWide",
+                "Smile",
+            ):
+                append_motion_coupled_skin(
+                    name,
+                    mouth,
+                    radius_x=0.18 * width,
+                    radius_y=0.145 * height,
+                    gain=0.66,
+                    max_x=0.030 * width,
+                    max_y=0.048 * height,
+                    z_gain=0.0,
                 )
-            if kind == "i":
-                return (
-                    0.010 * width * xnorm * sign_x * influence,
-                    -0.003 * height * influence,
-                    0.0,
-                )
-            if kind == "u":
-                return (
-                    -0.010 * width * xnorm * sign_x * influence,
-                    -0.004 * height * influence,
-                    0.0,
-                )
-            if kind == "e":
-                return (
-                    0.008 * width * xnorm * sign_x * influence,
-                    -0.012 * height * influence,
-                    0.0,
-                )
-            if kind == "o":
-                return (
-                    -0.007 * width * xnorm * sign_x * influence,
-                    -0.016 * height * influence,
-                    0.0,
-                )
-            if kind == "n":
-                return (
-                    0.0,
-                    (mouth_anchor[1] - point[1]) * 0.035 * influence,
-                    0.0,
-                )
-            if kind == "wide":
-                return (
-                    0.012 * width * xnorm * sign_x * influence,
-                    -0.002 * height * influence,
-                    0.0,
-                )
-            if kind == "smile":
-                return (
-                    0.008 * width * xnorm * sign_x * influence,
-                    0.018 * height * (0.35 + 0.65 * xnorm) * influence,
-                    0.0,
-                )
-            return (0.0, 0.0, 0.0)
-
-        for name, kind in (
-            ("MouthOpen", "a"),
-            ("MouthI", "i"),
-            ("MouthU", "u"),
-            ("MouthE", "e"),
-            ("MouthO", "o"),
-            ("MouthClosed", "n"),
-            ("MouthWide", "wide"),
-            ("Smile", "smile"),
-        ):
-            append_skin(
-                name,
-                mouth_support,
-                lambda point, influence, _kind=kind: mouth_skin_delta(
-                    _kind, point, influence
-                ),
-            )
 
         return morphs
 
