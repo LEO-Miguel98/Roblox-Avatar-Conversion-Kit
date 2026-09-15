@@ -217,8 +217,8 @@ def _upper_garment_sleeve_weights(point, side: str, by_name: dict[str, Bone]) ->
         # before the middle of the upper sleeve. Keep the upper sleeve mostly on the upper arm and
         # move the lower-arm blend toward the elbow so the fabric bends instead of rubber-stretching
         # across the whole limb.
-        chest = 0.22 * (1.0 - _smoothstep_range(first_t, 0.0, 0.40))
-        elbow_mix = _smoothstep_range(first_t, 0.48, 0.96)
+        chest = 0.22 * (1.0 - _smoothstep_range(first_t, 0.0, 0.45))
+        elbow_mix = _smoothstep_range(first_t, 0.48, 1.0)
         remainder = 1.0 - chest
         return {
             upper_name: remainder * (1.0 - elbow_mix),
