@@ -53,12 +53,25 @@
 - Optional PMXEditor re-save and visible-window screenshot
 - PMXEditor binaries remain external and are never redistributed
 
-## v0.3.4 — integrated PMXEditor validation ✅ implementation
+## v0.3.4 — integrated PMXEditor validation ✅
 - `rack pmx --pmxeditor PATH` converts and validates in one command on Windows
 - Original converter PMX is preserved; PMXEditor outputs are sidecars
 - Automatic PMXEditor-resaved PMX, JSON report, and screenshot by default
 - Writer-vs-PMXEditor count comparison for vertices, materials, bones, morphs, rigid bodies and joints
 - Non-zero exit code on PMXEditor rejection or count mismatch
+
+## v0.3.5 — standardized PMXEditor visual view ✅
+- Front-facing model framing from PMXEditor-parsed vertex bounds
+- Solid rendering with editing overlays hidden for cleaner silhouette screenshots
+- View normalization status included in PMXEditor reports
+
+## v0.3.6 — Roblox-to-MMD orientation / UV correction ✅
+- Correct avatar-space conversion now rotates 180° around Y: `(x, y, z) -> (-x, y, -z)`
+- OBJ texture V coordinates are converted for PMX with `(u, v) -> (u, 1-v)`
+- Fixes visibly mirrored/upside-down face props and incorrect face/hair texture sampling
+- Diane keeps the v0.3.2 silhouette-safe weights, layered clothing, physics, UTF-16LE text and material behavior unchanged
+- Diane regression still preserves 51,594 PMX vertices, 36,773 triangles, 16 materials, 30 bones, 10 rigid bodies and 7 joints
+- Structural parser reaches exact EOF after regeneration
 
 ### v0.3.x refinement
 - Automatic T/A-pose normalization for VRM workflows
