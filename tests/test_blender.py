@@ -22,7 +22,7 @@ class BlenderScriptTests(unittest.TestCase):
                 DynamicAccessory(
                     "Hair", "Handle1", "head", "rackDynamic_Handle1_Hair", "rackDynamic_Handle1_Hair_end",
                     (0, 3, 0), (0, 3.3, 0), (0, 3.6, 0), (0.5, 0.8, 0.3),
-                    0.5, 0.55, 0.15, 0.4,
+                    0.5, 0.55, 0.15, 0.4, "spring", 3,
                 ),
             ),
         )
@@ -46,6 +46,8 @@ class BlenderScriptTests(unittest.TestCase):
             self.assertIn('look_at.type = "bone"', source)
             self.assertIn("export_scene.vrm", source)
             self.assertIn("zero-delta editable scaffolds", source)
+            self.assertIn("PRIMARY_WEIGHT_FLOORS", source)
+            self.assertIn("chain_weights", source)
 
 
 if __name__ == "__main__":
