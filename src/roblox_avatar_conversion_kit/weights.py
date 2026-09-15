@@ -54,6 +54,17 @@ def _point_segment_distance(p, a, b):
     return _dist(p, q)
 
 
+def _point_segment_projection(p, a, b):
+    ab = tuple(b[i] - a[i] for i in range(3))
+    ap = tuple(p[i] - a[i] for i in range(3))
+    denom = sum(v * v for v in ab)
+    if denom <= 1e-12:
+        return _dist(p, a), 0.0
+    t = max(0.0, min(1.0, sum(ap[i] * ab[i] for i in range(3)) / denom))
+    q = tuple(a[i] + t * ab[i] for i in range(3))
+    return _dist(p, q), t
+
+
 def _children(bones):
     out = defaultdict(list)
     for bone in bones:
@@ -134,8 +145,6 @@ def weights_for_point(point, primary, bones, *, max_influences=4, primary_floor:
     scored.sort(key=lambda item: item[1], reverse=True)
     scored = scored[: max(1, max_influences)]
     if primary not in {name for name, _ in scored}:
-        # The primary is always in candidates. Recompute its score only if a very unusual caller
-        # uses max_influences smaller than the candidate count and it falls out of the top slice.
         a, b = segments[primary]
         length = max(_dist(a, b), 0.15)
         distance = _point_segment_distance(point, a, b)
@@ -156,16 +165,117 @@ def weights_for_point(point, primary, bones, *, max_influences=4, primary_floor:
 
 LAYERED_PROFILE_BONES = {
     "upper_body": {"hips", "spine", "chest", "leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand"},
+    "upper_garment": {"hips", "spine", "chest", "leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand"},
     "lower_body": {"hips", "leftUpperLeg", "leftLowerLeg", "leftFoot", "rightUpperLeg", "rightLowerLeg", "rightFoot"},
     "legs": {"leftUpperLeg", "leftLowerLeg", "leftFoot", "rightUpperLeg", "rightLowerLeg", "rightFoot"},
     "hands": {"leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand"},
     "feet": {"leftLowerLeg", "leftFoot", "rightLowerLeg", "rightFoot"},
 }
 
+
+def _normalize_weight_map(values: dict[str, float], *, max_influences=4) -> list[VertexWeight]:
+    kept = [(bone, max(float(weight), 0.0)) for bone, weight in values.items() if weight > 1e-8]
+    kept.sort(key=lambda item: item[1], reverse=True)
+    kept = kept[: max(1, max_influences)]
+    total = sum(weight for _, weight in kept) or 1.0
+    return [VertexWeight(bone, weight / total) for bone, weight in kept]
+
+
+def _upper_garment_torso_weights(point, by_name: dict[str, Bone]) -> dict[str, float]:
+    hips = by_name["hips"].position
+    spine = by_name["spine"].position
+    chest = by_name["chest"].position
+    y = point[1]
+    if y <= spine[1]:
+        span = max(spine[1] - hips[1], 1e-6)
+        t = max(0.0, min(1.0, (y - hips[1]) / span))
+        return {"hips": 1.0 - t, "spine": t}
+    span = max(chest[1] - spine[1], 1e-6)
+    t = max(0.0, min(1.0, (y - spine[1]) / span))
+    return {"spine": 1.0 - t, "chest": t}
+
+
+def _upper_garment_sleeve_weights(point, side: str, by_name: dict[str, Bone]) -> dict[str, float]:
+    upper_name = f"{side}UpperArm"
+    lower_name = f"{side}LowerArm"
+    hand_name = f"{side}Hand"
+    upper = by_name[upper_name].position
+    lower = by_name[lower_name].position
+    hand = by_name[hand_name].position
+
+    first_distance, first_t = _point_segment_projection(point, upper, lower)
+    second_distance, second_t = _point_segment_projection(point, lower, hand)
+    if first_distance <= second_distance:
+        # At the shoulder seam, keep a little chest influence so the jacket does not split from the
+        # torso when the arm lifts. That chest share fades rapidly before the elbow.
+        chest = 0.22 * ((1.0 - first_t) ** 2)
+        remainder = 1.0 - chest
+        return {
+            upper_name: remainder * (1.0 - first_t),
+            lower_name: remainder * first_t,
+            "chest": chest,
+        }
+
+    # Cuffs should follow the wrist, but they are still cloth around the forearm—not the hand mesh.
+    # Cap wrist/hand influence at 15% even at the end of the sleeve.
+    hand_share = 0.15 * second_t
+    return {lower_name: 1.0 - hand_share, hand_name: hand_share}
+
+
+def _weights_for_upper_garment_point(point, bones: list[Bone], *, max_influences=4):
+    """Skin jackets/long sleeves without turning the sleeve into the hand.
+
+    Central cloth follows hips/spine/chest. Each sleeve is side-locked and follows shoulder/upper
+    arm -> elbow/lower arm, with only a small capped wrist contribution at the cuff. A smooth seam
+    blend keeps the garment attached to the chest while preventing cross-arm contamination.
+    """
+    by_name = {bone.name: bone for bone in bones}
+    if not all(name in by_name for name in ("hips", "spine", "chest")):
+        return None
+
+    chest_x = by_name["chest"].position[0]
+    side = "left" if point[0] >= chest_x else "right"
+    arm_names = (f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand")
+    if not all(name in by_name for name in arm_names):
+        return _normalize_weight_map(_upper_garment_torso_weights(point, by_name), max_influences=max_influences)
+
+    shoulder_span = abs(by_name[arm_names[0]].position[0] - chest_x)
+    seam_start = max(0.16, shoulder_span * 0.58)
+    seam_end = max(seam_start + 0.08, shoulder_span * 1.18)
+    x_distance = abs(point[0] - chest_x)
+    sleeve_mix = max(0.0, min(1.0, (x_distance - seam_start) / (seam_end - seam_start)))
+    sleeve_mix = sleeve_mix * sleeve_mix * (3.0 - 2.0 * sleeve_mix)
+
+    torso = _upper_garment_torso_weights(point, by_name)
+    sleeve = _upper_garment_sleeve_weights(point, side, by_name)
+    combined: dict[str, float] = defaultdict(float)
+    for name, weight in torso.items():
+        combined[name] += weight * (1.0 - sleeve_mix)
+    for name, weight in sleeve.items():
+        combined[name] += weight * sleeve_mix
+
+    result = _normalize_weight_map(dict(combined), max_influences=max_influences)
+    hand_name = f"{side}Hand"
+    hand_value = next((item.weight for item in result if item.bone == hand_name), 0.0)
+    if hand_value > 0.15:
+        lower_name = f"{side}LowerArm"
+        values = {item.bone: item.weight for item in result}
+        excess = hand_value - 0.15
+        values[hand_name] = 0.15
+        values[lower_name] = values.get(lower_name, 0.0) + excess
+        result = _normalize_weight_map(values, max_influences=max_influences)
+    return result
+
+
 def weights_for_layered_point(point, bones: list[Bone], *, profile="upper_body", max_influences=4):
     # WrapLayer clothing should follow the body spatially rather than the single AccessoryWeld target.
     # Clothing profiles stop nearby but unrelated limbs (for example lowered hands beside shorts)
     # from stealing weights.
+    if profile in {"upper_body", "upper_garment"}:
+        garment = _weights_for_upper_garment_point(point, bones, max_influences=max_influences)
+        if garment:
+            return garment
+
     allowed = LAYERED_PROFILE_BONES.get(profile, LAYERED_PROFILE_BONES["upper_body"])
     candidates = [bone for bone in bones if bone.name in allowed] or list(bones)
     if not candidates:
