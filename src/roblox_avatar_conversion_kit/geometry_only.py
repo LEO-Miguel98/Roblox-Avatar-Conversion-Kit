@@ -218,18 +218,46 @@ def _connected_group_components(mesh: ObjMesh, group: str) -> list[set[int]]:
     return output
 
 
-def _restore_animated_head_skin(mesh: ObjMesh, head: _GroupInfo) -> tuple[int, int, int]:
-    """Split broad animated-head shell pieces away from transparent face-atlas material.
+def _component_uv_bounds(mesh: ObjMesh, group: str, component: set[int]):
+    uvs = []
+    materials: set[str] = set()
+    for face in mesh.faces:
+        if face.group != group:
+            continue
+        ids = [corner[0] for corner in face.corners]
+        if not all(vertex in component for vertex in ids):
+            continue
+        if face.material:
+            materials.add(face.material)
+        for _, uv_index, _ in face.corners:
+            if uv_index is not None and 0 <= uv_index < len(mesh.uvs):
+                uvs.append(mesh.uvs[uv_index])
+    if not uvs:
+        return None, materials
+    return (
+        min(uv[0] for uv in uvs),
+        max(uv[0] for uv in uvs),
+        min(uv[1] for uv in uvs),
+        max(uv[1] for uv in uvs),
+    ), materials
 
-    Roblox animated heads can store their large skin shell UVs in transparent atlas space and then
-    composite a base skin color underneath. PMX renders the texture alpha literally, which makes
-    the head disappear while eyes/lips remain. Give only the broad 3D shell pieces an untextured
-    synthetic material so PMX uses an opaque base color while detailed facial pieces keep the atlas.
+
+def _restore_animated_head_skin(mesh: ObjMesh, head: _GroupInfo) -> tuple[int, int, int]:
+    """Split Roblox animated-head base skin away from the transparent face atlas.
+
+    Dynamic heads commonly place the broad skin shell in a transparent UV island and composite a
+    base skin color underneath in Roblox. A first pass identifies large 3D shell pieces. Their UV
+    envelope is then used to recover smaller disconnected shell fragments (nose/philtrum/jaw seams)
+    that share the same base-skin atlas island. This avoids swallowing eyes/lashes/mouth geometry
+    while closing the small transparent holes that otherwise remain around the neutral face.
     """
     width, height, depth = (max(value, 1e-6) for value in head.size)
-    shell_vertices: set[int] = set()
-    component_count = 0
-    for component in _connected_group_components(mesh, head.name):
+    components = _connected_group_components(mesh, head.name)
+    seed_components: list[set[int]] = []
+    seed_uv_bounds = []
+    seed_materials: set[str] = set()
+
+    for component in components:
         if len(component) < 24:
             continue
         points = [mesh.vertices[index] for index in component]
@@ -241,9 +269,38 @@ def _restore_animated_head_skin(mesh: ObjMesh, head: _GroupInfo) -> tuple[int, i
             and size[1] >= 0.35 * height
             and size[2] >= 0.18 * depth
         ):
-            shell_vertices.update(component)
-            component_count += 1
+            seed_components.append(component)
+            uv_bounds, materials = _component_uv_bounds(mesh, head.name, component)
+            if uv_bounds is not None:
+                seed_uv_bounds.append(uv_bounds)
+            seed_materials.update(materials)
 
+    shell_components: list[set[int]] = list(seed_components)
+    if seed_uv_bounds:
+        atlas = (
+            min(item[0] for item in seed_uv_bounds),
+            max(item[1] for item in seed_uv_bounds),
+            min(item[2] for item in seed_uv_bounds),
+            max(item[3] for item in seed_uv_bounds),
+        )
+        margin = 0.006
+        for component in components:
+            if component in seed_components or len(component) < 6:
+                continue
+            uv_bounds, materials = _component_uv_bounds(mesh, head.name, component)
+            if uv_bounds is None:
+                continue
+            same_material = not seed_materials or bool(materials & seed_materials)
+            inside_skin_island = (
+                uv_bounds[0] >= atlas[0] - margin
+                and uv_bounds[1] <= atlas[1] + margin
+                and uv_bounds[2] >= atlas[2] - margin
+                and uv_bounds[3] <= atlas[3] + margin
+            )
+            if same_material and inside_skin_island:
+                shell_components.append(component)
+
+    shell_vertices = set().union(*shell_components) if shell_components else set()
     changed_faces = 0
     if shell_vertices:
         for face in mesh.faces:
@@ -253,7 +310,7 @@ def _restore_animated_head_skin(mesh: ObjMesh, head: _GroupInfo) -> tuple[int, i
                 source = face.material or "HeadSkin"
                 face.material = f"{source}__RACK_SKIN"
                 changed_faces += 1
-    return len(shell_vertices), component_count, changed_faces
+    return len(shell_vertices), len(shell_components), changed_faces
 
 
 def infer_geometry_only_avatar(mesh: ObjMesh):
