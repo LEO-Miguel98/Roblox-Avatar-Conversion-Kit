@@ -14,8 +14,6 @@ class _Mesh:
 
 class FaceTopologyWeldTests(unittest.TestCase):
     def test_blink_closes_real_socket_loop_to_shared_curve(self):
-        # Deliberately asymmetric upper/lower eyelid samples. The weld must pair by X instead of
-        # using one global average line, otherwise irregular Roblox eye sockets leave visible gaps.
         vertices = [
             (-0.30, 0.10, 0.0), (-0.10, 0.16, 0.0), (0.10, 0.15, 0.0), (0.30, 0.09, 0.0),
             (-0.30, -0.08, 0.0), (-0.10, -0.12, 0.0), (0.10, -0.11, 0.0), (0.30, -0.07, 0.0),
@@ -34,11 +32,12 @@ class FaceTopologyWeldTests(unittest.TestCase):
         vertices = [
             (-0.20, 0.00, 0.0), (-0.10, 0.00, 0.0),
             (0.10, 0.00, 0.0), (0.20, 0.00, 0.0),
-            (-0.18, 0.02, 0.0), (0.18, 0.02, 0.0),
+            (-0.18, 0.02, 0.0), (-0.12, 0.01, 0.0), (-0.06, 0.00, 0.0), (-0.02, 0.00, 0.0),
+            (0.02, 0.00, 0.0), (0.06, 0.00, 0.0), (0.12, 0.01, 0.0), (0.18, 0.02, 0.0),
         ]
         mesh = _Mesh(vertices)
         anchors = frozenset(range(4))
-        driver = frozenset(range(4, 6))
+        driver = frozenset(range(4, 12))
         field = _mouth_base_field(mesh, anchors, driver, "smile")
         left = min(field, key=lambda index: mesh.vertices[index][0])
         right = max(field, key=lambda index: mesh.vertices[index][0])
@@ -51,11 +50,12 @@ class FaceTopologyWeldTests(unittest.TestCase):
         vertices = [
             (-0.12, -0.03, 0.0), (0.12, -0.03, 0.0),
             (-0.12, 0.03, 0.0), (0.12, 0.03, 0.0),
-            (-0.10, -0.02, 0.0), (0.10, 0.02, 0.0),
+            (-0.10, -0.02, 0.0), (-0.07, -0.01, 0.0), (-0.03, 0.00, 0.0), (-0.01, 0.00, 0.0),
+            (0.01, 0.00, 0.0), (0.03, 0.00, 0.0), (0.07, 0.01, 0.0), (0.10, 0.02, 0.0),
         ]
         mesh = _Mesh(vertices)
         anchors = frozenset(range(4))
-        driver = frozenset(range(4, 6))
+        driver = frozenset(range(4, 12))
         field = _mouth_base_field(mesh, anchors, driver, "open")
         lower = [index for index in anchors if mesh.vertices[index][1] < 0.0]
         upper = [index for index in anchors if mesh.vertices[index][1] > 0.0]
