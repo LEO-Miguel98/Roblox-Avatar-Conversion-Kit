@@ -40,7 +40,12 @@ def _distance(a, b):
 
 
 def normalize_geometry_only_mesh(mesh: ObjMesh) -> tuple[float, float, float]:
-    """Remove obvious scene helpers and move an OBJ-only avatar to a useful model origin."""
+    """Remove obvious scene helpers and move an OBJ-only avatar to a useful model origin.
+
+    Geometry-only Roblox exports often include one or more giant Baseplate objects and no manifest
+    transforms.  We discard those faces, center the R15/Rig geometry on X/Z, and put the lowest
+    visible avatar point on Y=0.  Texture coordinates and vertex order are preserved.
+    """
     mesh.faces[:] = [
         face for face in mesh.faces
         if not face.group.lower().startswith(("baseplate", "terrain"))
@@ -86,6 +91,9 @@ def _infer_rig_layout(mesh: ObjMesh):
             f"Geometry-only inference currently expects at least 11 Rig* groups; found {len(rigs)}"
         )
 
+    # The head is the highest R15 body group.  The two most X-centered remaining groups are the
+    # upper/lower torso.  Diane-style exports then contain four symmetric limb levels:
+    # upper arms, hands, upper legs, and feet.
     head = max(rigs, key=lambda item: item.center[1])
     rest = [item for item in rigs if item.name != head.name]
     torso = sorted(
@@ -114,6 +122,7 @@ def _infer_layered_clothing(
     hips_y: float,
     chest_y: float,
     foot_y: float,
+    hand_y: float,
     torso_width: float,
 ) -> tuple[LayeredClothing, ...]:
     output: list[LayeredClothing] = []
@@ -130,6 +139,21 @@ def _infer_layered_clothing(
                 group=item.name,
                 accessory_type="GeometryOnly",
                 profile="feet",
+            ))
+            continue
+
+        # Some Roblox glove accessories export both hands as one Handle group. Detect the wide,
+        # shallow pair around hand height and let the hands profile split weights spatially.
+        if (
+            abs(item.center[1] - hand_y) <= 0.24
+            and item.size[0] > torso_width * 2.4
+            and item.size[1] < 0.45
+        ):
+            output.append(LayeredClothing(
+                name=f"Inferred gloves {item.name}",
+                group=item.name,
+                accessory_type="GeometryOnly",
+                profile="hands",
             ))
             continue
 
@@ -240,8 +264,8 @@ def infer_geometry_only_avatar(mesh: ObjMesh):
             segments=2,
         ))
 
-    # Shark tails project strongly behind the torso in Z. Restrict the search below the head so
-    # hair shells do not win the depth-aspect test.
+    # A shark tail projects strongly behind the torso in Z. Restrict the search below the head so
+    # hair shells do not win the aspect-ratio test.
     tail_candidates = [
         item for item in handles
         if item.name not in dynamic_groups and item.center[1] < head.center[1] - 0.35
@@ -278,20 +302,29 @@ def infer_geometry_only_avatar(mesh: ObjMesh):
             ))
 
     foot_y = min(feet["left"].center[1], feet["right"].center[1])
+    hand_y = (hands["left"].center[1] + hands["right"].center[1]) * 0.5
     layered = _infer_layered_clothing(
         handles,
         excluded=dynamic_groups,
         hips_y=hips[1],
         chest_y=chest[1],
         foot_y=foot_y,
+        hand_y=hand_y,
         torso_width=upper_torso.size[0],
     )
     layered_groups = {item.group for item in layered}
 
-    anchors = {"head": head_position, "spine": spine, "hips": hips}
+    # Remaining head-level accessories (hair, ears, glasses) stay rigid on the head. Other props
+    # bind to the nearest major body anchor. Layered clothing weights are replaced later by the
+    # profile-aware skinning pass.
+    anchors = {
+        "head": head_position,
+        "spine": spine,
+        "hips": hips,
+    }
     for item in handles:
         if item.name in dynamic_groups:
-            mapping[item.name] = "head" if heart and item.name == heart.name else "hips"
+            mapping[item.name] = "head" if item is heart else "hips"
         elif item.name in layered_groups:
             mapping[item.name] = "spine"
         elif item.center[1] > neck[1]:
