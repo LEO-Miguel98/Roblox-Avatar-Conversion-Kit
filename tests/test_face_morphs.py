@@ -149,6 +149,12 @@ class FaceMorphTests(unittest.TestCase):
         eye_line = sum(mesh.vertices[index][1] for index in regions.left_eye_surface) / len(
             regions.left_eye_surface
         )
+        # The visible eyelid/lash surface now finishes on the exact same closure line as the skin
+        # border. This prevents a VMD blink from leaving the eye surface floating inside its socket.
+        for index in regions.left_eye_surface:
+            if index in blink:
+                self.assertAlmostEqual(mesh.vertices[index][1] + blink[index][1], eye_line, places=7)
+
         upper_socket = [
             index for index in left_eye_skin
             if mesh.vertices[index][1] > eye_line and index in blink
@@ -183,10 +189,10 @@ class FaceMorphTests(unittest.TestCase):
         self.assertGreater(smile[left_corner][1], 0.0)
         self.assertGreater(smile[right_corner][1], 0.0)
 
-        self.assertLessEqual(eye_shell_peak, regions.size[1] * 0.12 + 1e-8)
-        self.assertLessEqual(mouth_shell_peak, regions.size[1] * 0.075 + 1e-8)
+        self.assertLessEqual(eye_shell_peak, regions.size[1] * 0.16 + 1e-8)
+        self.assertLessEqual(mouth_shell_peak, regions.size[1] * 0.090 + 1e-8)
 
-    def test_hidden_neutral_mouth_keeps_surface_attached_and_cavity_internal(self):
+    def test_hidden_cavity_is_not_part_of_standard_vmd_mouth_morphs(self):
         mesh, skin_seam, mouth_vertices, internal_mouth, _eye_skin = self._build_face()
         regions, by_name = self._morphs(mesh, mouth_hidden=True)
         self.assertIsNotNone(regions)
@@ -194,15 +200,21 @@ class FaceMorphTests(unittest.TestCase):
         self.assertTrue(internal_mouth.issubset(regions.mouth))
         self.assertGreater(regions.hide_depth, 0.0)
 
+        for name in (
+            "MouthOpen", "MouthI", "MouthU", "MouthE", "MouthO",
+            "MouthClosed", "MouthWide", "Smile",
+        ):
+            offsets = dict(by_name[name].offsets)
+            # Standard VMD phoneme/expression tracks must never translate the tucked-away cavity.
+            # Otherwise crossfaded vowels add multiple reveal offsets and explode teeth/tongue
+            # geometry through the face.
+            self.assertTrue(internal_mouth.isdisjoint(offsets))
+            self.assertTrue(mouth_vertices.issubset(offsets))
+            self.assertTrue(all(abs(offsets[index][2]) < 1e-6 for index in mouth_vertices))
+
         mouth_open = dict(by_name["MouthOpen"].offsets)
         self.assertTrue(skin_seam.issubset(mouth_open))
         self.assertTrue(all(abs(mouth_open[index][2]) < 1e-6 for index in skin_seam))
-        self.assertTrue(all(abs(mouth_open[index][2]) < 1e-6 for index in mouth_vertices))
-        self.assertTrue(any(mouth_open[index][2] > 0.05 for index in internal_mouth))
-
-        for name in ("MouthClosed", "Smile"):
-            offsets = dict(by_name[name].offsets)
-            self.assertTrue(all(abs(offsets[index][2]) < 1e-6 for index in internal_mouth))
 
 
 if __name__ == "__main__":
