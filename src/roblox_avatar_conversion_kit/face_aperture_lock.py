@@ -7,11 +7,14 @@ def install(pmx):
     """Make the restored facial skin the authoritative eye/mouth aperture motion.
 
     v0.3.21 made ordinary VMD tracks surface-only, but the visible eye/lip surfaces and the
-    flesh-colored socket/lip borders still computed their displacement independently.  Even small
-    differences accumulate into a visible gap while a motion is playing.  This finalizer pairs each
-    visible feature vertex with its nearest local opaque-skin boundary vertex and copies that exact
-    boundary morph delta to the feature.  The neutral spacing between the two layers is therefore
-    invariant for every standard face morph and for any additive VMD blend of those morphs.
+    flesh-colored socket/lip borders still computed their displacement independently. Even small
+    differences become a visible gap while a motion is playing.
+
+    This finalizer pairs every visible feature vertex with its nearest local opaque-skin boundary.
+    Mouth and non-blink eye expressions inherit that exact boundary delta, preserving the neutral
+    attachment under arbitrary additive VMD blends. Blink goes one step further: the visible eye
+    surface is vertically snapped to the paired skin boundary's *deformed* Y position so no white or
+    black slit can remain between the eyelid feature and the actual flesh-colored socket.
     """
 
     base_reconstructed_face_morphs = pmx._reconstructed_face_morphs
@@ -70,17 +73,6 @@ def install(pmx):
                 for pmx_index in source_to_pmx.get((group, source_index), ())
             }
 
-        def pmx_delta_for_source(morph, source_index):
-            pmx_indices = source_to_pmx.get((group, source_index), ())
-            if not pmx_indices:
-                return (0.0, 0.0, 0.0)
-            by_pmx = {vertex_index: delta for vertex_index, delta in morph.offsets}
-            values = [by_pmx[index] for index in pmx_indices if index in by_pmx]
-            if not values:
-                return (0.0, 0.0, 0.0)
-            count = float(len(values))
-            return tuple(sum(value[axis] for value in values) / count for axis in range(3))
-
         def local_boundary(source, *, radius_x, radius_y, side=None):
             if not source:
                 return frozenset()
@@ -118,12 +110,26 @@ def install(pmx):
                 )
             return output
 
-        def lock_feature_to_boundary(name, remove_source, pair_map):
+        def lock_feature_to_boundary(name, remove_source, pair_map, *, snap_y=False):
             morph = by_name.get(name)
             if morph is None or not pair_map:
                 return
 
-            # Remove every old feature-island delta first.  The already-authored skin offsets stay
+            # Capture the authoritative skin deltas before removing feature-island entries.
+            by_pmx = {vertex_index: delta for vertex_index, delta in morph.offsets}
+
+            def boundary_delta(source_index):
+                values = [
+                    by_pmx[pmx_index]
+                    for pmx_index in source_to_pmx.get((group, source_index), ())
+                    if pmx_index in by_pmx
+                ]
+                if not values:
+                    return (0.0, 0.0, 0.0)
+                count = float(len(values))
+                return tuple(sum(value[axis] for value in values) / count for axis in range(3))
+
+            # Remove every old feature-island delta first. The already-authored skin offsets stay
             # untouched and become the sole source of truth for this aperture.
             remove_pmx = source_pmx_indices(remove_source)
             if remove_pmx:
@@ -135,7 +141,16 @@ def install(pmx):
 
             for source_index in sorted(pair_map):
                 boundary_index = pair_map[source_index]
-                delta = pmx_delta_for_source(morph, boundary_index)
+                delta = boundary_delta(boundary_index)
+                if snap_y:
+                    # PMX flips source Z but leaves X/Y unchanged. Use the skin boundary's actual
+                    # deformed Y target, not an independently estimated eye closure line.
+                    boundary_target_y = mesh.vertices[boundary_index][1] + delta[1]
+                    delta = (
+                        delta[0],
+                        boundary_target_y - mesh.vertices[source_index][1],
+                        0.0,
+                    )
                 if max(abs(value) for value in delta) < 1e-7:
                     continue
                 for pmx_index in source_to_pmx.get((group, source_index), ()):
@@ -176,11 +191,16 @@ def install(pmx):
             scale_y=0.13 * height,
         )
 
-        lock_feature_to_boundary("BlinkLeft", regions.left_eye, left_eye_pairs)
-        lock_feature_to_boundary("BlinkRight", regions.right_eye, right_eye_pairs)
+        lock_feature_to_boundary(
+            "BlinkLeft", regions.left_eye, left_eye_pairs, snap_y=True
+        )
+        lock_feature_to_boundary(
+            "BlinkRight", regions.right_eye, right_eye_pairs, snap_y=True
+        )
         combined_eye_pairs = dict(left_eye_pairs)
         combined_eye_pairs.update(right_eye_pairs)
-        for name in ("Blink", "EyeWide", "HalfLid", "HappyEyes"):
+        lock_feature_to_boundary("Blink", all_eye, combined_eye_pairs, snap_y=True)
+        for name in ("EyeWide", "HalfLid", "HappyEyes"):
             lock_feature_to_boundary(name, all_eye, combined_eye_pairs)
 
         mouth_all = getattr(regions, "mouth_all", regions.mouth)
