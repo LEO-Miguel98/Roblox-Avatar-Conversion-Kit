@@ -149,8 +149,6 @@ def candidates(primary):
     if spec and spec["parent"]:
         names.append(spec["parent"])
     names.extend(children.get(primary, []))
-    if primary in {"hips", "spine", "chest", "neck"}:
-        names.extend([name for name in ("hips", "spine", "chest", "neck") if name in by_name])
     result = []
     for name in names:
         if name in by_name and name not in result:
