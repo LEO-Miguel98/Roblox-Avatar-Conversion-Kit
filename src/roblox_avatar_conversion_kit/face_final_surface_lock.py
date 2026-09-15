@@ -20,11 +20,12 @@ def _local_skin_vertices(mesh, group, center, size, feature, *, radius_x, radius
 
 
 def install(pmx):
-    """Final morph-space lock between visible face overlays and the flesh-colored skin.
+    """Final hard lock between visible lips and the finished flesh-colored mouth skin.
 
-    Topology reconstruction establishes the real socket/lip deformation first. This last pass runs
-    after every VMD compatibility alias and copies the *finished* skin displacement onto the visible
-    overlay. Therefore additive VMD blends cannot change the neutral overlay-to-skin relative vector.
+    Eye overlays are intentionally left to the topology-weld pass because Blink must finish on the
+    socket closure curve rather than merely copy the socket delta. Mouth overlays, by contrast, must
+    preserve their neutral relative vector under additive VMD blends, so an exact final delta lock is
+    correct for them.
     """
     base_reconstructed_face_morphs = pmx._reconstructed_face_morphs
 
@@ -50,9 +51,6 @@ def install(pmx):
         group = regions.group
         width, height, _depth = regions.size
         mouth_surface = getattr(regions, "mouth_surface", frozenset())
-        left_eye = regions.left_eye_surface
-        right_eye = regions.right_eye_surface
-
         mouth_skin = _local_skin_vertices(
             mesh,
             group,
@@ -61,24 +59,6 @@ def install(pmx):
             mouth_surface,
             radius_x=0.18 * width,
             radius_y=0.12 * height,
-        )
-        left_skin = _local_skin_vertices(
-            mesh,
-            group,
-            regions.center,
-            regions.size,
-            left_eye,
-            radius_x=0.18 * width,
-            radius_y=0.15 * height,
-        )
-        right_skin = _local_skin_vertices(
-            mesh,
-            group,
-            regions.center,
-            regions.size,
-            right_eye,
-            radius_x=0.18 * width,
-            radius_y=0.15 * height,
         )
 
         def source_pmx(source):
@@ -151,21 +131,6 @@ def install(pmx):
                     mouth_skin,
                     0.12 * width,
                     0.08 * height,
-                )
-            elif morph.panel == 2:
-                hard_lock(
-                    morph,
-                    left_eye,
-                    left_skin,
-                    0.16 * width,
-                    0.13 * height,
-                )
-                hard_lock(
-                    morph,
-                    right_eye,
-                    right_skin,
-                    0.16 * width,
-                    0.13 * height,
                 )
 
         return morphs
