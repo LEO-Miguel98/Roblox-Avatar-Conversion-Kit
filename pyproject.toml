@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "roblox-avatar-conversion-kit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first Roblox avatar export converter for Blender, MMD/PMX, GLB and VRM workflows."
 readme = "README.md"
 requires-python = ">=3.10"
