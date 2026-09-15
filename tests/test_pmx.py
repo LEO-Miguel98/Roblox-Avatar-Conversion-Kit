@@ -4,18 +4,34 @@ from pathlib import Path
 
 from roblox_avatar_conversion_kit.features import DynamicAccessory, EyeRig, FeaturePlan
 from roblox_avatar_conversion_kit.obj import Face, ObjMesh
-from roblox_avatar_conversion_kit.pmx import _mmd_uv, _mmd_vec3, write_pmx
+from roblox_avatar_conversion_kit.pmx import _mmd_uv, _mmd_vec3, _planar_uv_flip_groups, write_pmx
 from roblox_avatar_conversion_kit.rig import Bone
 
 
 class PmxTests(unittest.TestCase):
 
     def test_roblox_to_mmd_coordinate_and_uv_conversion(self):
-        # Roblox avatar exports face -Z with character-left on -X.
-        # MMD/PMX uses the opposite model-facing basis, so rotate 180 degrees around Y.
-        self.assertEqual(_mmd_vec3((2.0, 3.0, -4.0)), (-2.0, 3.0, 4.0))
-        # PMX and OBJ use opposite V texture origins; U must stay unchanged.
+        # Preserve Roblox left/right while flipping depth into MMD space.
+        self.assertEqual(_mmd_vec3((2.0, 3.0, -4.0)), (2.0, 3.0, 4.0))
+        # PMX and OBJ use opposite V texture origins.
         self.assertEqual(_mmd_uv((0.25, 0.75)), (0.25, 0.25))
+        # Thin double-sided billboards need U mirrored as well so text stays readable.
+        self.assertEqual(_mmd_uv((0.25, 0.75), flip_u=True), (0.75, 0.25))
+
+    def test_detects_only_extremely_thin_accessory_billboards(self):
+        mesh = ObjMesh(
+            vertices=[
+                (-1, 0, 0), (1, 0, 0), (-1, 1, 0.01), (1, 1, 0.01),
+                (-1, 0, 1), (1, 0, 1), (-1, 1, 2), (1, 1, 2),
+            ],
+            faces=[
+                Face([(0, None, None), (1, None, None), (2, None, None)], "Handle8", None),
+                Face([(1, None, None), (3, None, None), (2, None, None)], "Handle8", None),
+                Face([(4, None, None), (5, None, None), (6, None, None)], "Handle7", None),
+                Face([(5, None, None), (7, None, None), (6, None, None)], "Handle7", None),
+            ],
+        )
+        self.assertEqual(_planar_uv_flip_groups(mesh), {"Handle8"})
 
     def test_writes_pmx_with_gaze_ik_and_accessory_physics(self):
         mesh = ObjMesh(
@@ -78,7 +94,7 @@ class PmxTests(unittest.TestCase):
             )
             data = out.read_bytes()
             self.assertEqual(data[:4], b"PMX ")
-            self.assertEqual(data[9], 0)  # PMX global encoding flag: 0 = UTF-16LE
+            self.assertEqual(data[9], 0)
             self.assertEqual(stats["triangles"], 2)
             self.assertEqual(stats["ik_bones"], 2)
             self.assertEqual(stats["gaze_morphs"], 4)

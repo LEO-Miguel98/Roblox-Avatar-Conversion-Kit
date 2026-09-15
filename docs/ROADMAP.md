@@ -65,13 +65,18 @@
 - Solid rendering with editing overlays hidden for cleaner silhouette screenshots
 - View normalization status included in PMXEditor reports
 
-## v0.3.6 — Roblox-to-MMD orientation / UV correction ✅
-- Correct avatar-space conversion now rotates 180° around Y: `(x, y, z) -> (-x, y, -z)`
+## v0.3.6 — UV-origin correction ✅
 - OBJ texture V coordinates are converted for PMX with `(u, v) -> (u, 1-v)`
-- Fixes visibly mirrored/upside-down face props and incorrect face/hair texture sampling
-- Diane keeps the v0.3.2 silhouette-safe weights, layered clothing, physics, UTF-16LE text and material behavior unchanged
-- Diane regression still preserves 51,594 PMX vertices, 36,773 triangles, 16 materials, 30 bones, 10 rigid bodies and 7 joints
-- Structural parser reaches exact EOF after regeneration
+- Corrected upside-down texture sampling exposed by Diane's face/hair and speech-bubble regression
+- The attempted global X inversion was subsequently removed in v0.3.7 because it mirrored Diane's left/right layout
+
+## v0.3.7 — left/right + planar prop correction ✅
+- Roblox-to-MMD geometry preserves X and flips depth only: `(x, y, z) -> (x, y, -z)`
+- Restores Diane's speech bubble and sword layout to the same left/right arrangement as the Roblox source
+- Detects extremely thin `Handle*` billboard accessories generically from mesh bounds
+- Billboard accessories receive an additional U flip while ordinary hair, clothing, swords and body meshes remain unchanged
+- Diane's `Handle8` speech bubble is the regression case: ~1% thickness-to-size ratio, so its text becomes readable without mirroring the entire avatar
+- UTF-16LE text, v0.3.2 conservative weights, WrapLayer skinning and physics behavior remain intact
 
 ### v0.3.x refinement
 - Automatic T/A-pose normalization for VRM workflows
