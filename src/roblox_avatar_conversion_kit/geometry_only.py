@@ -142,7 +142,7 @@ def _infer_layered_clothing(
             ))
             continue
 
-        # Some Roblox glove accessories export both hands as one Handle group. Detect the wide,
+        # Some Roblox glove accessories export both hands as one Handle group.  Detect the wide,
         # shallow pair around hand height and let the hands profile split weights spatially.
         if (
             abs(item.center[1] - hand_y) <= 0.24
@@ -186,9 +186,80 @@ def _infer_layered_clothing(
     return tuple(output)
 
 
+def _connected_group_components(mesh: ObjMesh, group: str) -> list[set[int]]:
+    faces = [face for face in mesh.faces if face.group == group]
+    adjacency: dict[int, set[int]] = {}
+    vertices: set[int] = set()
+    for face in faces:
+        ids = [corner[0] for corner in face.corners]
+        vertices.update(ids)
+        for vertex in ids:
+            adjacency.setdefault(vertex, set())
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                adjacency[ids[i]].add(ids[j])
+                adjacency[ids[j]].add(ids[i])
+    seen: set[int] = set()
+    output: list[set[int]] = []
+    for start in vertices:
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        component: set[int] = set()
+        while stack:
+            vertex = stack.pop()
+            component.add(vertex)
+            for neighbor in adjacency.get(vertex, ()):
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        output.append(component)
+    return output
+
+
+def _restore_animated_head_skin(mesh: ObjMesh, head: _GroupInfo) -> tuple[int, int, int]:
+    """Split broad animated-head shell pieces away from transparent face-atlas material.
+
+    Roblox animated heads can store their large skin shell UVs in transparent atlas space and then
+    composite a base skin color underneath. PMX renders the texture alpha literally, which makes
+    the head disappear while eyes/lips remain. Give only the broad 3D shell pieces an untextured
+    synthetic material so PMX uses an opaque base color while detailed facial pieces keep the atlas.
+    """
+    width, height, depth = (max(value, 1e-6) for value in head.size)
+    shell_vertices: set[int] = set()
+    component_count = 0
+    for component in _connected_group_components(mesh, head.name):
+        if len(component) < 24:
+            continue
+        points = [mesh.vertices[index] for index in component]
+        lo = tuple(min(point[axis] for point in points) for axis in range(3))
+        hi = tuple(max(point[axis] for point in points) for axis in range(3))
+        size = tuple(hi[axis] - lo[axis] for axis in range(3))
+        if (
+            size[0] >= 0.35 * width
+            and size[1] >= 0.35 * height
+            and size[2] >= 0.18 * depth
+        ):
+            shell_vertices.update(component)
+            component_count += 1
+
+    changed_faces = 0
+    if shell_vertices:
+        for face in mesh.faces:
+            if face.group != head.name:
+                continue
+            if all(corner[0] in shell_vertices for corner in face.corners):
+                source = face.material or "HeadSkin"
+                face.material = f"{source}__RACK_SKIN"
+                changed_faces += 1
+    return len(shell_vertices), component_count, changed_faces
+
+
 def infer_geometry_only_avatar(mesh: ObjMesh):
     """Infer a usable humanoid rig/features from a Roblox OBJ that has no avatar_manifest.json."""
     infos, head, upper_torso, lower_torso, arms, hands, legs, feet = _infer_rig_layout(mesh)
+    skin_vertices, skin_components, skin_faces = _restore_animated_head_skin(mesh, head)
 
     hips = lower_torso.center
     spine = _mid(lower_torso.center, upper_torso.center)
@@ -264,7 +335,7 @@ def infer_geometry_only_avatar(mesh: ObjMesh):
             segments=2,
         ))
 
-    # A shark tail projects strongly behind the torso in Z. Restrict the search below the head so
+    # A shark tail projects strongly behind the torso in Z.  Restrict the search below the head so
     # hair shells do not win the aspect-ratio test.
     tail_candidates = [
         item for item in handles
@@ -314,8 +385,8 @@ def infer_geometry_only_avatar(mesh: ObjMesh):
     )
     layered_groups = {item.group for item in layered}
 
-    # Remaining head-level accessories (hair, ears, glasses) stay rigid on the head. Other props
-    # bind to the nearest major body anchor. Layered clothing weights are replaced later by the
+    # Remaining head-level accessories (hair, ears, glasses) stay rigid on the head.  Other props
+    # bind to the nearest major body anchor.  Layered clothing weights are replaced later by the
     # profile-aware skinning pass.
     anchors = {
         "head": head_position,
@@ -352,6 +423,7 @@ def infer_geometry_only_avatar(mesh: ObjMesh):
     )
     warnings = [
         "No avatar_manifest.json was supplied; humanoid bones and accessory roles were inferred from OBJ geometry.",
+        f"Animated-head base skin restoration: {skin_vertices} shell vertices across {skin_components} components / {skin_faces} faces use an opaque PMX skin material.",
         "Geometry-only rig inference is conservative: rigid props stay rigid, while only the detected tail and cowlick receive spring physics.",
         "OBJ carries no source facial morph deltas; facial expression morphs must be reconstructed from visible face geometry or authored separately.",
     ]
